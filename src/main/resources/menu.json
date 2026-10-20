@@ -1,0 +1,10 @@
+[
+  { "menu_id": "M01", "name": "Lẩu thái", "price": 199000, "prep_minutes": 15, "sold_out": false },
+  { "menu_id": "M02", "name": "Gà nướng muối ớt", "price": 159000, "prep_minutes": 20, "sold_out": false },
+  { "menu_id": "M03", "name": "Phở bò tái", "price": 45000, "prep_minutes": 5, "sold_out": false },
+  { "menu_id": "M04", "name": "Mực chiên giòn", "price": 99000, "prep_minutes": 8, "sold_out": false },
+  { "menu_id": "M05", "name": "Khoai tây chiên", "price": 35000, "prep_minutes": 4, "sold_out": false },
+  { "menu_id": "M06", "name": "Rau muống xào tỏi", "price": 39000, "prep_minutes": 3, "sold_out": false },
+  { "menu_id": "D01", "name": "Trà đá", "price": 5000, "prep_minutes": 1, "sold_out": false },
+  { "menu_id": "D02", "name": "Bia lon", "price": 20000, "prep_minutes": 1, "sold_out": false }
+]

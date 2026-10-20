@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thiết bị rung</title>
+<!-- Bản khung (TODO Khoa, F08): kết nối SSE /api/pager/events, nhận PAGER_CALL, gửi PAGER_RECEIVED và PICKED_UP. -->
+<style>
+  html, body { height: 100%; margin: 0; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: #1b1b1b; color: #fff;
+         display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+         text-align: center; padding: 16px; box-sizing: border-box; }
+  body.alarm { animation: flash .5s steps(1) infinite; }
+  @keyframes flash { 50% { background: #d62d20; } }
+  #num { font-size: 72px; font-weight: 700; }
+  #info { font-size: 22px; min-height: 60px; }
+  button { font-size: 20px; padding: 16px 28px; border-radius: 12px; border: none; }
+  #activate { background: #2e86de; color: #fff; }
+  #test { background: #444; color: #fff; }
+</style>
+</head>
+<body>
+<div>Thiết bị rung số</div>
+<div id="num">?</div>
+<div id="info">Bấm "Kích hoạt" để cho phép phát chuông</div>
+<button id="activate">Kích hoạt</button>
+<button id="test" hidden>Thử chuông (3 giây)</button>
+
+<script>
+const params = new URLSearchParams(location.search);
+document.getElementById('num').textContent = params.get('id') || '?';
+
+let audio = null;
+
+// Safari chỉ cho phát âm thanh sau một thao tác chạm của người dùng.
+document.getElementById('activate').onclick = async () => {
+  audio = new (window.AudioContext || window.webkitAudioContext)();
+  await audio.resume();
+  beep(0.05);
+  document.getElementById('activate').hidden = true;
+  document.getElementById('test').hidden = false;
+  document.getElementById('info').textContent = 'Đã kích hoạt. Giữ màn hình luôn sáng và tắt chế độ im lặng.';
+};
+
+function beep(seconds) {
+  const osc = audio.createOscillator();
+  const gain = audio.createGain();
+  osc.frequency.value = 880;
+  gain.gain.value = 0.4;
+  osc.connect(gain).connect(audio.destination);
+  osc.start();
+  osc.stop(audio.currentTime + seconds);
+}
+
+// Báo động thử: chuông lặp, nháy đỏ, rung nếu trình duyệt hỗ trợ (Android).
+function alarm(ms) {
+  document.body.classList.add('alarm');
+  if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]);
+  const timer = setInterval(() => beep(0.25), 500);
+  setTimeout(() => { clearInterval(timer); document.body.classList.remove('alarm'); }, ms);
+}
+
+document.getElementById('test').onclick = () => alarm(3000);
+</script>
+</body>
+</html>

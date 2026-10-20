@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gọi món</title>
+<!-- Bản khung (TODO Cường, F02): hoàn thiện giao diện, xem trạng thái đơn qua SSE, tự cập nhật thực đơn. -->
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 16px; background: #f6f6f4; color: #222; }
+  h1 { font-size: 22px; margin: 0 0 12px; }
+  .row { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  label { font-size: 14px; display: flex; flex-direction: column; gap: 4px; }
+  input { font-size: 16px; padding: 8px; border: 1px solid #bbb; border-radius: 8px; }
+  input[type=number] { width: 80px; }
+  .item { background: #fff; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+  .item.soldout { opacity: .4; }
+  .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .qty { display: flex; align-items: center; gap: 8px; }
+  .qty button { width: 38px; height: 38px; font-size: 20px; border-radius: 50%; border: none; background: #e5e5e5; }
+  .note { width: 100%; box-sizing: border-box; margin-top: 8px; display: none; }
+  .price { color: #777; font-size: 14px; }
+  #send { width: 100%; padding: 14px; font-size: 18px; border: none; border-radius: 10px; background: #c0392b; color: #fff; }
+  #send:disabled { background: #aaa; }
+  #result { margin-top: 12px; font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>Gọi món</h1>
+<div class="row">
+  <label>Tên thiết bị <input id="device" value="IPAD1"></label>
+  <label>Bàn <input id="table" type="number" min="1"></label>
+  <label>Thiết bị rung <input id="pager" type="number" min="1" value="1"></label>
+</div>
+<div id="menu">Đang tải thực đơn...</div>
+<button id="send">Gửi bếp</button>
+<div id="result"></div>
+
+<script>
+const qty = {};
+let counter = 0;
+
+function fmt(n) { return n.toLocaleString('vi-VN') + 'đ'; }
+
+async function loadMenu() {
+  const res = await fetch('/api/menu');
+  const data = await res.json();
+  const box = document.getElementById('menu');
+  box.innerHTML = '';
+  for (const m of data.menu) {
+    qty[m.menu_id] = 0;
+    const div = document.createElement('div');
+    div.className = 'item' + (m.sold_out ? ' soldout' : '');
+    div.innerHTML =
+      '<div class="top"><div><div>' + m.name + '</div><div class="price">' + fmt(m.price) +
+      ' · ' + m.prep_minutes + ' phút</div></div>' +
+      '<div class="qty"><button data-d="-1">−</button><span>0</span><button data-d="1">+</button></div></div>' +
+      '<input class="note" maxlength="100" placeholder="Ghi chú (ít cay, không hành...)">';
+    const span = div.querySelector('span');
+    const note = div.querySelector('.note');
+    div.querySelectorAll('button').forEach(b => b.onclick = () => {
+      if (m.sold_out) return;
+      qty[m.menu_id] = Math.max(0, qty[m.menu_id] + Number(b.dataset.d));
+      span.textContent = qty[m.menu_id];
+      note.style.display = qty[m.menu_id] > 0 ? 'block' : 'none';
+    });
+    note.dataset.id = m.menu_id;
+    box.appendChild(div);
+  }
+}
+
+document.getElementById('send').onclick = async () => {
+  const result = document.getElementById('result');
+  const items = [];
+  for (const id in qty) {
+    if (qty[id] > 0) {
+      const note = document.querySelector('.note[data-id="' + id + '"]').value;
+      items.push({ menu_id: id, qty: qty[id], note: note });
+    }
+  }
+  const table = Number(document.getElementById('table').value);
+  if (!table) { result.textContent = 'Chưa chọn bàn'; return; }
+  if (items.length === 0) { result.textContent = 'Đơn chưa có món'; return; }
+  const device = document.getElementById('device').value.trim() || 'WEB';
+  const msg = {
+    command: 'NEW_ORDER',
+    req_id: device + '-' + Date.now() + '-' + (++counter),
+    name: device,
+    table: table,
+    pager_id: Number(document.getElementById('pager').value),
+    items: items
+  };
+  const btn = document.getElementById('send');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/order', { method: 'POST', body: JSON.stringify(msg) });
+    const data = await res.json();
+    if (data.command === 'ORDER_ACK') {
+      result.textContent = 'Đã gửi - đơn số ' + data.order_id + (data.kitchen_online ? '' : ' (bếp chưa kết nối!)');
+      loadMenu();
+    } else {
+      result.textContent = 'Lỗi: ' + data.message;
+    }
+  } catch (e) {
+    result.textContent = 'Chưa gửi được, kiểm tra Wi-Fi rồi bấm lại';
+  }
+  btn.disabled = false;
+};
+
+loadMenu().catch(() => document.getElementById('menu').textContent = 'Không tải được thực đơn');
+</script>
+</body>
+</html>
