@@ -14,7 +14,7 @@ public final class Protocol {
     /** Cổng TCP cho Masterchef Display. */
     public static final int TCP_PORT = 6000;
     /** Cổng HTTP cho trang gọi món và trang thiết bị rung. */
-    public static final int HTTP_PORT = 8080;
+   public static final int HTTP_PORT = 8081;
 
     // ---- Thời gian (mili giây) ----
     /** Chu kỳ gửi PING / heartbeat. */
