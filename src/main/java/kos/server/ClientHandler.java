@@ -16,8 +16,8 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * Phục vụ một màn hình bếp kết nối qua TCP, chạy trên một luồng riêng.
- * Bản khung xử lý HELLO, PING; các lệnh của masterchef trả ERROR "Chưa hỗ trợ".
- * TODO (Nam): START_ITEMS, EXTEND_ITEMS, FINISH_ITEMS, SOLD_OUT (F05 - F07).
+ * Xử lý HELLO, PING và các lệnh của masterchef (START_ITEMS, EXTEND_ITEMS, FINISH_ITEMS).
+ * TODO (Nam): SOLD_OUT (F07).
  */
 public class ClientHandler implements Runnable {
 
@@ -96,6 +96,16 @@ public class ClientHandler implements Runnable {
                 Message pong = new Message(Protocol.PONG);
                 pong.serverTime = System.currentTimeMillis();
                 send(pong);
+            }
+            case Protocol.START_ITEMS, Protocol.EXTEND_ITEMS, Protocol.FINISH_ITEMS -> {
+                if (!Protocol.MODE_MASTERCHEF.equals(mode)) {
+                    send(Message.error(msg.reqId, "Không có quyền: chỉ màn hình MASTERCHEF được thao tác"));
+                    return;
+                }
+                Message err = ctx.kitchen().handle(msg, name);
+                if (err != null) {
+                    send(err);
+                }
             }
             default -> send(Message.error(msg.reqId, "Chưa hỗ trợ lệnh " + msg.command));
         }

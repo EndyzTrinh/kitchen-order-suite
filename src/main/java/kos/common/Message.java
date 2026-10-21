@@ -25,6 +25,7 @@ public class Message {
     public ItemStatus status;
     public Long startedAt;
     public Long deadline;
+    public Integer extendedMinutes;
     public List<OrderItem> items;
     public Order order;
     public List<Order> orders;

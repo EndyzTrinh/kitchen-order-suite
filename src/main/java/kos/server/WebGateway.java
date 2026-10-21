@@ -17,9 +17,9 @@ import java.util.concurrent.Executors;
 
 /**
  * Cổng HTTP cho trang gọi món và trang thiết bị rung.
- * Bản khung có: GET /order, GET /pager, GET /api/menu, POST /api/order.
- * TODO (Nam): GET /api/snapshot, GET /api/events và /api/pager/events (SSE),
- * POST /api/pager/received, /api/pager/ack, heartbeat (F08, F09, F11).
+ * Đã có: GET /order, GET /pager, GET /api/menu, POST /api/order,
+ * GET /api/pager/events (SSE), POST /api/pager/received, POST /api/pager/ack.
+ * TODO (Nam): GET /api/snapshot, GET /api/events (SSE cho trang gọi món), heartbeat (F11).
  */
 public class WebGateway {
 
@@ -37,6 +37,9 @@ public class WebGateway {
         server.createContext("/pager", ex -> servePage(ex, "/web/pager.html"));
         server.createContext("/api/menu", this::handleMenu);
         server.createContext("/api/order", this::handleOrder);
+        server.createContext("/api/pager/events", this::handlePagerEvents);
+        server.createContext("/api/pager/received", ex -> handlePagerReply(ex, false));
+        server.createContext("/api/pager/ack", ex -> handlePagerReply(ex, true));
         // Nhóm luồng riêng: các kết nối SSE giữ mở sau này không chặn yêu cầu khác.
         pool = Executors.newCachedThreadPool();
         server.setExecutor(pool);
@@ -116,6 +119,64 @@ public class WebGateway {
                 ctx.clients().broadcast(news);
             }
         }
+    }
+
+    /** GET /api/pager/events?id=N - kết nối SSE giữ mở, không đóng exchange ở đây. */
+    private void handlePagerEvents(HttpExchange ex) throws IOException {
+        Integer id = queryInt(ex, "id");
+        if (id == null || id < 1) {
+            try (ex) {
+                sendText(ex, 400, "text/plain", "Thiếu số thiết bị rung (id)");
+            }
+            return;
+        }
+        ctx.pagers().register(ex, id);
+    }
+
+    /** POST /api/pager/received (PAGER_RECEIVED) và /api/pager/ack (PICKED_UP). */
+    private void handlePagerReply(HttpExchange ex, boolean pickedUp) throws IOException {
+        try (ex) {
+            if (!"POST".equals(ex.getRequestMethod())) {
+                sendText(ex, 405, "text/plain", "Chỉ hỗ trợ POST");
+                return;
+            }
+            String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Message req;
+            try {
+                req = Json.parseMessage(body);
+            } catch (JsonParseException e) {
+                sendJson(ex, Message.error(null, "Thông điệp không hợp lệ"));
+                return;
+            }
+            boolean ok = pickedUp
+                    ? ctx.pagers().onPickedUp(req.callId, req.pagerId)
+                    : ctx.pagers().onReceived(req.callId, req.pagerId);
+            if (!ok) {
+                sendJson(ex, Message.error(req.reqId, "Lệnh " + req.callId + " đã đóng hoặc không tồn tại"));
+                return;
+            }
+            Message reply = new Message(pickedUp ? Protocol.PICKED_UP : Protocol.PAGER_RECEIVED);
+            reply.callId = req.callId;
+            sendJson(ex, reply);
+        }
+    }
+
+    private static Integer queryInt(HttpExchange ex, String key) {
+        String q = ex.getRequestURI().getRawQuery();
+        if (q == null) {
+            return null;
+        }
+        for (String pair : q.split("&")) {
+            String[] kv = pair.split("=", 2);
+            if (kv.length == 2 && kv[0].equals(key)) {
+                try {
+                    return Integer.parseInt(kv[1]);
+                } catch (NumberFormatException e) {
+                    return null;
+                }
+            }
+        }
+        return null;
     }
 
     private static void sendJson(HttpExchange ex, Message m) throws IOException {

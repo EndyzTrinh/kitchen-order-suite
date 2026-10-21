@@ -17,7 +17,7 @@ Lần đầu NetBeans sẽ tự tải thư viện Gson; cần có Internet.
 
 1. **Máy chủ:** chuột phải `src/main/java/kos/server/ServerApp.java` → **Run File**.
    Cửa sổ Output in ra địa chỉ để mở trên iPad / iPhone, ví dụ
-   `gọi món http://192.168.1.10:8080/order | thiết bị rung http://192.168.1.10:8080/pager?id=1`.
+   `gọi món http://192.168.1.10:8081/order | thiết bị rung http://192.168.1.10:8081/pager?id=1`.
    Lần đầu Windows hỏi tường lửa: chọn **Cho phép**, tích **mạng riêng (Private)**.
 2. **Màn hình bếp:** chuột phải `kos/kitchen/MasterchefApp.java` → **Run File**.
    Chạy trên máy khác thì thêm IP máy chủ: chuột phải dự án → Properties → Run → Arguments, nhập `192.168.1.10`.

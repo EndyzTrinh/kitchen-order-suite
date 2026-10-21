@@ -1,4 +1,4 @@
-# Đặc tả giao thức - Kitchen Order Suite (bản nháp 0.1)
+# Đặc tả giao thức - Kitchen Order Suite (bản nháp 0.2)
 
 Mọi thông điệp là một đối tượng JSON (UTF-8). Tên trường viết snake_case. Trường nào không dùng thì bỏ.
 Hằng số tương ứng nằm trong `kos/common/Protocol.java`.
@@ -8,8 +8,8 @@ Hằng số tương ứng nằm trong `kos/common/Protocol.java`.
 | Kênh | Cổng | Ai dùng | Đóng khung thông điệp |
 | --- | --- | --- | --- |
 | TCP | 6000 | Masterchef Display | Mỗi thông điệp một dòng, kết thúc bằng `\n` |
-| HTTP | 8080 | Trang gọi món, thiết bị rung | Thân yêu cầu / phản hồi (Content-Length) |
-| SSE trên HTTP | 8080 | Trang gọi món, thiết bị rung | Mỗi sự kiện: dòng `event:`, các dòng `data:`, một dòng trống |
+| HTTP | 8081 | Trang gọi món, thiết bị rung | Thân yêu cầu / phản hồi (Content-Length) |
+| SSE trên HTTP | 8081 | Trang gọi món, thiết bị rung | Mỗi sự kiện: dòng `event:`, các dòng `data:`, một dòng trống |
 
 ## Đường dẫn HTTP
 
@@ -22,9 +22,9 @@ Hằng số tương ứng nằm trong `kos/common/Protocol.java`.
 | `/api/snapshot` | GET | SNAPSHOT các đơn chưa hoàn tất | Chưa làm |
 | `/api/events` | GET (SSE) | ORDER_NEW, ITEM_UPDATE, MENU_UPDATE cho trang gọi món | Chưa làm |
 | `/api/heartbeat` | POST | Heartbeat của trang gọi món | Chưa làm |
-| `/api/pager/events?id=N` | GET (SSE) | PAGER_CALL, PAGER_CLOSE cho thiết bị N | Chưa làm |
-| `/api/pager/received` | POST | PAGER_RECEIVED | Chưa làm |
-| `/api/pager/ack` | POST | PICKED_UP | Chưa làm |
+| `/api/pager/events?id=N` | GET (SSE) | PAGER_CALL, PAGER_CLOSE cho thiết bị N | Đã có |
+| `/api/pager/received` | POST | PAGER_RECEIVED | Đã có |
+| `/api/pager/ack` | POST | PICKED_UP | Đã có |
 | `/api/pager/heartbeat` | POST | Heartbeat của thiết bị rung | Chưa làm |
 
 ## Lệnh
@@ -38,16 +38,16 @@ Hằng số tương ứng nằm trong `kos/common/Protocol.java`.
 | NEW_ORDER | Trang gọi món → máy chủ | req_id, name, table, pager_id, items[menu_id, qty, note] | Đã có |
 | ORDER_ACK | Máy chủ → trang gọi món | req_id, order_id, kitchen_online | Đã có |
 | ORDER_NEW | Máy chủ → thiết bị | order | Đã có (TCP) |
-| START_ITEMS | Masterchef → máy chủ | req_id, items[order_id, item_no] | Chưa làm |
-| EXTEND_ITEMS | Masterchef → máy chủ | req_id, items[order_id, item_no], minutes | Chưa làm |
-| FINISH_ITEMS | Masterchef → máy chủ | req_id, items[order_id, item_no] | Chưa làm |
+| START_ITEMS | Masterchef → máy chủ | req_id, items[order_id, item_no] | Đã có |
+| EXTEND_ITEMS | Masterchef → máy chủ | req_id, items[order_id, item_no], minutes | Đã có |
+| FINISH_ITEMS | Masterchef → máy chủ | req_id, items[order_id, item_no] | Đã có |
 | SOLD_OUT | Masterchef → máy chủ | req_id, menu_id, reason | Chưa làm |
-| ITEM_UPDATE | Máy chủ → thiết bị | order_id, item_no, status, started_at, deadline, reason, by | Chưa làm |
+| ITEM_UPDATE | Máy chủ → thiết bị | order_id, item_no, status, started_at, deadline, reason, by | Đã có |
 | MENU_UPDATE | Máy chủ → thiết bị | menu | Chưa làm (chỉ có qua /api/menu) |
-| PAGER_CALL | Máy chủ → thiết bị rung | call_id, pager_id, order_id, table, items | Chưa làm |
-| PAGER_RECEIVED | Thiết bị rung → máy chủ | call_id, pager_id | Chưa làm |
-| PICKED_UP | Thiết bị rung → máy chủ | call_id, pager_id | Chưa làm |
-| PAGER_CLOSE | Máy chủ → thiết bị rung | call_id | Chưa làm |
+| PAGER_CALL | Máy chủ → thiết bị rung | call_id, pager_id, order_id, table, items | Đã có |
+| PAGER_RECEIVED | Thiết bị rung → máy chủ | call_id, pager_id | Đã có |
+| PICKED_UP | Thiết bị rung → máy chủ | call_id, pager_id | Đã có |
+| PAGER_CLOSE | Máy chủ → thiết bị rung | call_id | Đã có |
 | ERROR | Máy chủ → nơi gửi | req_id, message | Đã có |
 
 ## Quy tắc

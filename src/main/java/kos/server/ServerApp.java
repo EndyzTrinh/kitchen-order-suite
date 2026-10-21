@@ -26,6 +26,7 @@ public class ServerApp {
         ServerContext ctx = new ServerContext(menu, orders);
 
         new WebGateway(ctx).start();
+        ctx.pagers().start();
         startTcp(ctx);
 
         ctx.log("Đã nạp " + menu.getAll().size() + " món");

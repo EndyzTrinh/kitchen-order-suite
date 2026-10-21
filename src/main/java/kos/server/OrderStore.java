@@ -14,14 +14,23 @@ import java.util.Map;
 
 /**
  * Nơi duy nhất giữ và thay đổi trạng thái đơn. Mọi phương thức thay đổi dữ liệu đều synchronized
- * vì được gọi từ nhiều luồng (ClientHandler, WebGateway, KitchenTimer).
- * Bản khung hiện mới có addOrder. TODO (Nam): startItems, extendItems, finishItems, soldOut,
- * markReady, cancelItem, markServed, lưu file (F05 - F07, F10, F12).
+ * vì được gọi từ nhiều luồng: ClientHandler (masterchef), WebGateway (trang web), KitchenTimer (hết giờ).
+ * Nhờ vậy khi hết giờ đúng lúc masterchef bấm gia hạn, chỉ một thay đổi được áp dụng trước,
+ * thay đổi sau được kiểm tra lại trạng thái.
+ * TODO (Nam): soldOut, cancelItem, lưu file (F07, F10, F12).
  */
 public class OrderStore {
 
     /** Kết quả của addOrder: đơn đã tạo hoặc thông báo lỗi. */
     public record AddResult(Order order, String error, boolean duplicate) { }
+
+    /** Một món vừa thay đổi, kèm đơn chứa nó. */
+    public record Change(Order order, OrderItem item) { }
+
+    /** Kết quả của một lệnh áp dụng cho nhiều món: món nào đổi được, món nào lỗi. */
+    public record BatchResult(List<Change> changed, List<String> errors) { }
+
+    private static final long MINUTE_MS = 60_000L;
 
     private final MenuStore menu;
     private final Map<Integer, Order> orders = new LinkedHashMap<>();
@@ -32,6 +41,8 @@ public class OrderStore {
     public OrderStore(MenuStore menu) {
         this.menu = menu;
     }
+
+    // ------------------------------------------------------------------ gọi món (F03)
 
     public synchronized AddResult addOrder(String reqId, String waiter, Integer table, Integer pagerId,
                                            List<OrderItem> requested) {
@@ -80,6 +91,7 @@ public class OrderStore {
             it.note = req.note == null ? "" : req.note;
             it.prepMinutes = m.prepMinutes;
             it.status = ItemStatus.PENDING;
+            it.extendedMinutes = 0;
             order.items.add(it);
         }
         order.orderId = nextOrderId++;
@@ -87,6 +99,111 @@ public class OrderStore {
         handledRequests.put(reqId, order.orderId);
         return new AddResult(order, null, false);
     }
+
+    // ------------------------------------------------------------------ lệnh của masterchef
+
+    /** Nhận làm (F05): PENDING -> COOKING, đặt hạn giờ = now + thời gian chuẩn bị. */
+    public synchronized BatchResult startItems(List<OrderItem> refs, long now) {
+        List<Change> changed = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
+        for (OrderItem ref : refs) {
+            Change c = locate(ref, errors);
+            if (c == null) {
+                continue;
+            }
+            OrderItem it = c.item();
+            if (it.status != ItemStatus.PENDING) {
+                errors.add(label(c) + " đang ở trạng thái " + it.status + ", không nhận làm được");
+                continue;
+            }
+            int prep = it.prepMinutes == null ? 0 : it.prepMinutes;
+            it.status = ItemStatus.COOKING;
+            it.startedAt = now;
+            it.deadline = now + prep * MINUTE_MS;
+            changed.add(c);
+        }
+        return new BatchResult(changed, errors);
+    }
+
+    /** Gia hạn (F06): cộng thêm minutes phút vào hạn giờ của món đang làm. */
+    public synchronized BatchResult extendItems(List<OrderItem> refs, int minutes) {
+        List<Change> changed = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
+        for (OrderItem ref : refs) {
+            Change c = locate(ref, errors);
+            if (c == null) {
+                continue;
+            }
+            OrderItem it = c.item();
+            if (it.status != ItemStatus.COOKING) {
+                errors.add(label(c) + (it.status == ItemStatus.READY ? " đã hết giờ" : " không ở trạng thái đang làm"));
+                continue;
+            }
+            int already = it.extendedMinutes == null ? 0 : it.extendedMinutes;
+            if (already + minutes > Protocol.MAX_EXTEND_MINUTES) {
+                errors.add(label(c) + " đã gia hạn " + already + " phút, tối đa " + Protocol.MAX_EXTEND_MINUTES + " phút");
+                continue;
+            }
+            it.extendedMinutes = already + minutes;
+            it.deadline = it.deadline + minutes * MINUTE_MS;
+            changed.add(c);
+        }
+        return new BatchResult(changed, errors);
+    }
+
+    /** Xong sớm (F07): COOKING -> READY ngay. */
+    public synchronized BatchResult finishItems(List<OrderItem> refs) {
+        List<Change> changed = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
+        for (OrderItem ref : refs) {
+            Change c = locate(ref, errors);
+            if (c == null) {
+                continue;
+            }
+            if (c.item().status != ItemStatus.COOKING) {
+                errors.add(label(c) + " không ở trạng thái đang làm");
+                continue;
+            }
+            c.item().status = ItemStatus.READY;
+            changed.add(c);
+        }
+        return new BatchResult(changed, errors);
+    }
+
+    /**
+     * Bộ hẹn giờ gọi khi đến hạn. Chỉ chuyển READY nếu món vẫn đang làm và hạn giờ không đổi
+     * (nếu masterchef đã gia hạn thì lần hẹn giờ cũ này bị bỏ qua, lần hẹn giờ mới sẽ xử lý).
+     *
+     * @return thay đổi, hoặc null nếu không có gì thay đổi
+     */
+    public synchronized Change markReadyIfDue(int orderId, int itemNo, long deadline) {
+        Order o = orders.get(orderId);
+        OrderItem it = o == null ? null : o.findItem(itemNo);
+        if (it == null || it.status != ItemStatus.COOKING || it.deadline == null || it.deadline != deadline) {
+            return null;
+        }
+        it.status = ItemStatus.READY;
+        return new Change(o, it);
+    }
+
+    /** Phục vụ đã lấy món: READY -> SERVED. */
+    public synchronized List<Change> markServed(int orderId, List<Integer> itemNos) {
+        List<Change> changed = new ArrayList<>();
+        Order o = orders.get(orderId);
+        if (o == null) {
+            return changed;
+        }
+        for (int no : itemNos) {
+            OrderItem it = o.findItem(no);
+            if (it != null && it.status == ItemStatus.READY) {
+                it.status = ItemStatus.SERVED;
+                changed.add(new Change(o, it));
+            }
+        }
+        return changed;
+    }
+
+    // ------------------------------------------------------------------ đọc dữ liệu
 
     /** Các đơn chưa hoàn tất, dùng cho SNAPSHOT. */
     public synchronized List<Order> getOpenOrders() {
@@ -97,5 +214,23 @@ public class OrderStore {
             }
         }
         return list;
+    }
+
+    private Change locate(OrderItem ref, List<String> errors) {
+        if (ref == null || ref.orderId == null || ref.itemNo == null) {
+            errors.add("Thiếu order_id hoặc item_no");
+            return null;
+        }
+        Order o = orders.get(ref.orderId);
+        OrderItem it = o == null ? null : o.findItem(ref.itemNo);
+        if (it == null) {
+            errors.add("Không có món " + ref.itemNo + " trong đơn " + ref.orderId);
+            return null;
+        }
+        return new Change(o, it);
+    }
+
+    private static String label(Change c) {
+        return "Món " + c.item().name + " (đơn " + c.order().orderId + ", bàn " + c.order().table + ")";
     }
 }

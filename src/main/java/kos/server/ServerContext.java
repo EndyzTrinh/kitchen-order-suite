@@ -4,7 +4,7 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
 /**
- * Gom các thành phần dùng chung của máy chủ để truyền cho ClientHandler và WebGateway.
+ * Gom các thành phần dùng chung của máy chủ để truyền cho ClientHandler, WebGateway, KitchenController.
  * TODO (Cường): chuyển log() sang thẻ Log của giao diện quầy quản lý.
  */
 public class ServerContext {
@@ -14,10 +14,14 @@ public class ServerContext {
     private final MenuStore menu;
     private final OrderStore orders;
     private final ClientRegistry clients = new ClientRegistry();
+    private final PagerDispatcher pagers;
+    private final KitchenController kitchen;
 
     public ServerContext(MenuStore menu, OrderStore orders) {
         this.menu = menu;
         this.orders = orders;
+        this.pagers = new PagerDispatcher(this);
+        this.kitchen = new KitchenController(this);
     }
 
     public MenuStore menu() {
@@ -30,6 +34,14 @@ public class ServerContext {
 
     public ClientRegistry clients() {
         return clients;
+    }
+
+    public PagerDispatcher pagers() {
+        return pagers;
+    }
+
+    public KitchenController kitchen() {
+        return kitchen;
     }
 
     public void log(String text) {

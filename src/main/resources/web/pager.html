@@ -4,45 +4,49 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Thiết bị rung</title>
-<!-- Bản khung (TODO Khoa, F08): kết nối SSE /api/pager/events, nhận PAGER_CALL, gửi PAGER_RECEIVED và PICKED_UP. -->
+<!-- Bản chạy được của F08. TODO (Khoa): làm đẹp giao diện. -->
 <style>
   html, body { height: 100%; margin: 0; }
   body { font-family: -apple-system, system-ui, sans-serif; background: #1b1b1b; color: #fff;
-         display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+         display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
          text-align: center; padding: 16px; box-sizing: border-box; }
   body.alarm { animation: flash .5s steps(1) infinite; }
   @keyframes flash { 50% { background: #d62d20; } }
-  #num { font-size: 72px; font-weight: 700; }
-  #info { font-size: 22px; min-height: 60px; }
+  #num { font-size: 72px; font-weight: 700; line-height: 1; }
+  #status { font-size: 15px; color: #aaa; }
+  #status.ok { color: #6fcf73; }
+  #info { font-size: 18px; }
   button { font-size: 20px; padding: 16px 28px; border-radius: 12px; border: none; }
   #activate { background: #2e86de; color: #fff; }
-  #test { background: #444; color: #fff; }
+  #test { background: #444; color: #fff; font-size: 16px; padding: 10px 18px; }
+  .call { background: #fff; color: #111; border-radius: 14px; padding: 16px; width: 100%; max-width: 420px;
+          box-sizing: border-box; }
+  .call h2 { margin: 0 0 8px; font-size: 26px; }
+  .call ul { list-style: none; padding: 0; margin: 0 0 12px; font-size: 20px; }
+  .call button { background: #27ae60; color: #fff; width: 100%; }
 </style>
 </head>
 <body>
 <div>Thiết bị rung số</div>
 <div id="num">?</div>
+<div id="status">Chưa kết nối</div>
 <div id="info">Bấm "Kích hoạt" để cho phép phát chuông</div>
 <button id="activate">Kích hoạt</button>
+<div id="calls"></div>
 <button id="test" hidden>Thử chuông (3 giây)</button>
 
 <script>
-const params = new URLSearchParams(location.search);
-document.getElementById('num').textContent = params.get('id') || '?';
+const pagerId = Number(new URLSearchParams(location.search).get('id')) || 0;
+document.getElementById('num').textContent = pagerId || '?';
 
 let audio = null;
+let alarmTimer = null;
+const calls = {};          // call_id -> lệnh đang mở
 
-// Safari chỉ cho phát âm thanh sau một thao tác chạm của người dùng.
-document.getElementById('activate').onclick = async () => {
-  audio = new (window.AudioContext || window.webkitAudioContext)();
-  await audio.resume();
-  beep(0.05);
-  document.getElementById('activate').hidden = true;
-  document.getElementById('test').hidden = false;
-  document.getElementById('info').textContent = 'Đã kích hoạt. Giữ màn hình luôn sáng và tắt chế độ im lặng.';
-};
-
+// ---------- âm thanh và báo động ----------
 function beep(seconds) {
+  if (!audio) return;
+  audio.resume();
   const osc = audio.createOscillator();
   const gain = audio.createGain();
   osc.frequency.value = 880;
@@ -52,15 +56,87 @@ function beep(seconds) {
   osc.stop(audio.currentTime + seconds);
 }
 
-// Báo động thử: chuông lặp, nháy đỏ, rung nếu trình duyệt hỗ trợ (Android).
-function alarm(ms) {
+function startAlarm() {
   document.body.classList.add('alarm');
-  if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]);
-  const timer = setInterval(() => beep(0.25), 500);
-  setTimeout(() => { clearInterval(timer); document.body.classList.remove('alarm'); }, ms);
+  if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]);   // chỉ Android có rung
+  if (!alarmTimer) alarmTimer = setInterval(() => beep(0.25), 600);
 }
 
-document.getElementById('test').onclick = () => alarm(3000);
+function stopAlarm() {
+  document.body.classList.remove('alarm');
+  if (navigator.vibrate) navigator.vibrate(0);
+  clearInterval(alarmTimer);
+  alarmTimer = null;
+}
+
+// ---------- hiển thị các lệnh đang mở ----------
+function render() {
+  const box = document.getElementById('calls');
+  box.innerHTML = '';
+  for (const id in calls) {
+    const c = calls[id];
+    const div = document.createElement('div');
+    div.className = 'call';
+    const items = c.items.map(it => '<li>' + it.name + ' x' + it.qty + '</li>').join('');
+    div.innerHTML = '<h2>Bàn ' + c.table + '</h2><ul>' + items + '</ul><button>Đã lấy món</button>';
+    div.querySelector('button').onclick = () => pickedUp(c.call_id);
+    box.appendChild(div);
+  }
+  if (Object.keys(calls).length === 0) stopAlarm();
+}
+
+// ---------- giao tiếp với máy chủ ----------
+function post(path, body) {
+  return fetch(path, { method: 'POST', body: JSON.stringify(body) }).then(r => r.json());
+}
+
+async function pickedUp(callId) {
+  try {
+    await post('/api/pager/ack', { command: 'PICKED_UP', call_id: callId, pager_id: pagerId });
+  } catch (e) { /* mất mạng: máy chủ sẽ rung lại, bấm lại sau */ }
+  delete calls[callId];
+  render();
+}
+
+function connect() {
+  const status = document.getElementById('status');
+  const es = new EventSource('/api/pager/events?id=' + pagerId);   // tự kết nối lại khi mất mạng
+
+  es.onopen = () => { status.textContent = 'Đã kết nối máy chủ'; status.className = 'ok'; };
+  es.onerror = () => { status.textContent = 'Mất kết nối - đang thử lại...'; status.className = ''; };
+
+  es.addEventListener('PAGER_CALL', e => {
+    const c = JSON.parse(e.data);
+    post('/api/pager/received', { command: 'PAGER_RECEIVED', call_id: c.call_id, pager_id: pagerId })
+      .catch(() => {});
+    calls[c.call_id] = c;          // lệnh gửi lại có cùng call_id nên không bị trùng
+    render();
+    startAlarm();
+  });
+
+  es.addEventListener('PAGER_CLOSE', e => {
+    const c = JSON.parse(e.data);
+    delete calls[c.call_id];
+    render();
+  });
+}
+
+// Safari chỉ cho phát âm thanh sau một thao tác chạm của người dùng.
+document.getElementById('activate').onclick = async () => {
+  if (!pagerId) { document.getElementById('info').textContent = 'Thiếu số thiết bị: mở /pager?id=1'; return; }
+  audio = new (window.AudioContext || window.webkitAudioContext)();
+  await audio.resume();
+  beep(0.05);
+  document.getElementById('activate').hidden = true;
+  document.getElementById('test').hidden = false;
+  document.getElementById('info').textContent = 'Giữ màn hình luôn sáng, tắt chế độ im lặng.';
+  connect();
+};
+
+document.getElementById('test').onclick = () => {
+  startAlarm();
+  setTimeout(() => { if (Object.keys(calls).length === 0) stopAlarm(); }, 3000);
+};
 </script>
 </body>
 </html>
