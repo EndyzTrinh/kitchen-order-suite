@@ -11,15 +11,26 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Cổng HTTP cho trang gọi món và trang thiết bị rung.
- * Đã có: GET /order, GET /pager, GET /api/menu, POST /api/order,
- * GET /api/pager/events (SSE), POST /api/pager/received, POST /api/pager/ack.
- * TODO (Nam): GET /api/snapshot, GET /api/events (SSE cho trang gọi món), heartbeat (F11).
+ * Cổng HTTP cho trang gọi món và trang thiết bị rung (F02, F03, F08, F11).
+ * <pre>
+ * GET  /order                      trang gọi món
+ * GET  /pager?id=N                 trang thiết bị rung
+ * GET  /api/menu                   MENU_UPDATE kèm thực đơn
+ * GET  /api/snapshot               SNAPSHOT các đơn chưa hoàn tất
+ * GET  /api/events?name=X          SSE cho trang gọi món (ORDER_NEW, ITEM_UPDATE, MENU_UPDATE)
+ * POST /api/order                  NEW_ORDER -> ORDER_ACK / ERROR
+ * POST /api/heartbeat              heartbeat của trang gọi món
+ * GET  /api/pager/events?id=N      SSE cho thiết bị rung (PAGER_CALL, PAGER_CLOSE)
+ * POST /api/pager/received         PAGER_RECEIVED
+ * POST /api/pager/ack              PICKED_UP
+ * POST /api/pager/heartbeat        heartbeat của thiết bị rung
+ * </pre>
  */
 public class WebGateway {
 
@@ -36,11 +47,15 @@ public class WebGateway {
         server.createContext("/order", ex -> servePage(ex, "/web/order.html"));
         server.createContext("/pager", ex -> servePage(ex, "/web/pager.html"));
         server.createContext("/api/menu", this::handleMenu);
+        server.createContext("/api/snapshot", this::handleSnapshot);
+        server.createContext("/api/events", this::handleOrderEvents);
         server.createContext("/api/order", this::handleOrder);
+        server.createContext("/api/heartbeat", ex -> handleHeartbeat(ex, false));
         server.createContext("/api/pager/events", this::handlePagerEvents);
         server.createContext("/api/pager/received", ex -> handlePagerReply(ex, false));
         server.createContext("/api/pager/ack", ex -> handlePagerReply(ex, true));
-        // Nhóm luồng riêng: các kết nối SSE giữ mở sau này không chặn yêu cầu khác.
+        server.createContext("/api/pager/heartbeat", ex -> handleHeartbeat(ex, true));
+        // Nhóm luồng riêng: các kết nối SSE giữ mở không chặn yêu cầu khác.
         pool = Executors.newCachedThreadPool();
         server.setExecutor(pool);
         server.start();
@@ -55,6 +70,8 @@ public class WebGateway {
             pool.shutdownNow();
         }
     }
+
+    // ------------------------------------------------------------------ trang tĩnh, đọc dữ liệu
 
     private void servePage(HttpExchange ex, String resource) throws IOException {
         try (ex; InputStream in = WebGateway.class.getResourceAsStream(resource)) {
@@ -71,8 +88,7 @@ public class WebGateway {
 
     private void handleMenu(HttpExchange ex) throws IOException {
         try (ex) {
-            if (!"GET".equals(ex.getRequestMethod())) {
-                sendText(ex, 405, "text/plain", "Chỉ hỗ trợ GET");
+            if (!requireMethod(ex, "GET")) {
                 return;
             }
             Message m = new Message(Protocol.MENU_UPDATE);
@@ -82,25 +98,47 @@ public class WebGateway {
         }
     }
 
-    private void handleOrder(HttpExchange ex) throws IOException {
+    private void handleSnapshot(HttpExchange ex) throws IOException {
         try (ex) {
-            if (!"POST".equals(ex.getRequestMethod())) {
-                sendText(ex, 405, "text/plain", "Chỉ hỗ trợ POST");
+            if (!requireMethod(ex, "GET")) {
                 return;
             }
-            String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-            Message req;
-            try {
-                req = Json.parseMessage(body);
-            } catch (JsonParseException e) {
-                sendJson(ex, Message.error(null, "Thông điệp không hợp lệ"));
+            Message m = new Message(Protocol.SNAPSHOT);
+            m.orders = ctx.orders().getOpenOrders();
+            m.serverTime = System.currentTimeMillis();
+            sendJson(ex, m);
+        }
+    }
+
+    /** GET /api/events?name=X - SSE của trang gọi món, giữ mở, không đóng exchange. */
+    private void handleOrderEvents(HttpExchange ex) throws IOException {
+        String name = query(ex, "name");
+        if (name == null || name.isBlank()) {
+            name = "WEB";
+        }
+        SseClient sse = SseClient.open(ex, name);
+        if (sse != null) {
+            ctx.webHub().add(sse);
+            ctx.devices().touch(DeviceRegistry.TYPE_ORDER, name, sse.ip);
+        }
+    }
+
+    // ------------------------------------------------------------------ gửi đơn
+
+    private void handleOrder(HttpExchange ex) throws IOException {
+        try (ex) {
+            Message req = readMessage(ex);
+            if (req == null) {
                 return;
             }
             if (!Protocol.NEW_ORDER.equals(req.command)) {
                 sendJson(ex, Message.error(req.reqId, "Đường dẫn này chỉ nhận NEW_ORDER"));
                 return;
             }
-            OrderStore.AddResult r = ctx.orders().addOrder(req.reqId, req.name, req.table, req.pagerId, req.items);
+            String ip = remoteIp(ex);
+            String name = req.name == null || req.name.isBlank() ? "WEB" : req.name;
+            ctx.devices().touch(DeviceRegistry.TYPE_ORDER, name, ip);
+            OrderStore.AddResult r = ctx.orders().addOrder(req.reqId, name, req.table, req.pagerId, req.items);
             if (r.error() != null) {
                 sendJson(ex, Message.error(req.reqId, r.error()));
                 return;
@@ -112,18 +150,20 @@ public class WebGateway {
             sendJson(ex, ack);
 
             if (!r.duplicate()) {
-                ctx.log("Đơn " + r.order().orderId + " - bàn " + r.order().table + " từ "
-                        + req.name + " [" + ex.getRemoteAddress().getAddress().getHostAddress() + "]");
+                ctx.log("Đơn " + r.order().orderId + " - bàn " + r.order().table + " từ " + name + " [" + ip + "]");
                 Message news = new Message(Protocol.ORDER_NEW);
                 news.order = r.order();
-                ctx.clients().broadcast(news);
+                ctx.broadcast(news);
+                ctx.save();
             }
         }
     }
 
+    // ------------------------------------------------------------------ thiết bị rung
+
     /** GET /api/pager/events?id=N - kết nối SSE giữ mở, không đóng exchange ở đây. */
     private void handlePagerEvents(HttpExchange ex) throws IOException {
-        Integer id = queryInt(ex, "id");
+        Integer id = parseInt(query(ex, "id"));
         if (id == null || id < 1) {
             try (ex) {
                 sendText(ex, 400, "text/plain", "Thiếu số thiết bị rung (id)");
@@ -136,17 +176,12 @@ public class WebGateway {
     /** POST /api/pager/received (PAGER_RECEIVED) và /api/pager/ack (PICKED_UP). */
     private void handlePagerReply(HttpExchange ex, boolean pickedUp) throws IOException {
         try (ex) {
-            if (!"POST".equals(ex.getRequestMethod())) {
-                sendText(ex, 405, "text/plain", "Chỉ hỗ trợ POST");
+            Message req = readMessage(ex);
+            if (req == null) {
                 return;
             }
-            String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-            Message req;
-            try {
-                req = Json.parseMessage(body);
-            } catch (JsonParseException e) {
-                sendJson(ex, Message.error(null, "Thông điệp không hợp lệ"));
-                return;
+            if (req.pagerId != null) {
+                ctx.devices().touch(DeviceRegistry.TYPE_PAGER, String.valueOf(req.pagerId), remoteIp(ex));
             }
             boolean ok = pickedUp
                     ? ctx.pagers().onPickedUp(req.callId, req.pagerId)
@@ -161,7 +196,56 @@ public class WebGateway {
         }
     }
 
-    private static Integer queryInt(HttpExchange ex, String key) {
+    // ------------------------------------------------------------------ heartbeat (F11)
+
+    /** POST /api/heartbeat {"name":...} hoặc /api/pager/heartbeat {"pager_id":...} -> PONG. */
+    private void handleHeartbeat(HttpExchange ex, boolean pager) throws IOException {
+        try (ex) {
+            Message req = readMessage(ex);
+            if (req == null) {
+                return;
+            }
+            String ip = remoteIp(ex);
+            if (pager && req.pagerId != null) {
+                ctx.devices().touch(DeviceRegistry.TYPE_PAGER, String.valueOf(req.pagerId), ip);
+            } else if (!pager && req.name != null && !req.name.isBlank()) {
+                ctx.devices().touch(DeviceRegistry.TYPE_ORDER, req.name, ip);
+            }
+            Message pong = new Message(Protocol.PONG);
+            pong.serverTime = System.currentTimeMillis();
+            sendJson(ex, pong);
+        }
+    }
+
+    // ------------------------------------------------------------------ tiện ích
+
+    /** Đọc thân POST thành Message; tự trả lỗi và trả về null nếu không hợp lệ. */
+    private static Message readMessage(HttpExchange ex) throws IOException {
+        if (!requireMethod(ex, "POST")) {
+            return null;
+        }
+        String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        try {
+            return Json.parseMessage(body);
+        } catch (JsonParseException e) {
+            sendJson(ex, Message.error(null, "Thông điệp không hợp lệ"));
+            return null;
+        }
+    }
+
+    private static boolean requireMethod(HttpExchange ex, String method) throws IOException {
+        if (method.equals(ex.getRequestMethod())) {
+            return true;
+        }
+        sendText(ex, 405, "text/plain", "Chỉ hỗ trợ " + method);
+        return false;
+    }
+
+    private static String remoteIp(HttpExchange ex) {
+        return ex.getRemoteAddress().getAddress().getHostAddress();
+    }
+
+    private static String query(HttpExchange ex, String key) {
         String q = ex.getRequestURI().getRawQuery();
         if (q == null) {
             return null;
@@ -169,14 +253,18 @@ public class WebGateway {
         for (String pair : q.split("&")) {
             String[] kv = pair.split("=", 2);
             if (kv.length == 2 && kv[0].equals(key)) {
-                try {
-                    return Integer.parseInt(kv[1]);
-                } catch (NumberFormatException e) {
-                    return null;
-                }
+                return URLDecoder.decode(kv[1], StandardCharsets.UTF_8);
             }
         }
         return null;
+    }
+
+    private static Integer parseInt(String s) {
+        try {
+            return s == null ? null : Integer.parseInt(s.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static void sendJson(HttpExchange ex, Message m) throws IOException {

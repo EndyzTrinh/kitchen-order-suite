@@ -131,6 +131,8 @@ document.getElementById('activate').onclick = async () => {
   document.getElementById('test').hidden = false;
   document.getElementById('info').textContent = 'Giữ màn hình luôn sáng, tắt chế độ im lặng.';
   connect();
+  // heartbeat mỗi 5 giây để quầy biết thiết bị còn hoạt động (F11)
+  setInterval(() => post('/api/pager/heartbeat', { command: 'PING', pager_id: pagerId }).catch(() => {}), 5000);
 };
 
 document.getElementById('test').onclick = () => {

@@ -39,13 +39,28 @@ test-data/menu-demo.json    Thực đơn có thời gian chuẩn bị 1 - 2 phú
 docs/PROTOCOL.md            Đặc tả giao thức
 ```
 
+## Thử nhanh với thời gian chuẩn bị 1 - 2 phút
+
+Tạo thư mục `data` trong thư mục dự án, chép `test-data/menu-demo.json` vào đó và đổi tên thành `menu.json`.
+Máy chủ cũng tự lưu `data/orders.json`; xóa file này nếu muốn bắt đầu lại từ đầu.
+Thư mục `data` không đưa lên GitHub (đã có trong `.gitignore`).
+
+Trong cửa sổ Output của MasterchefApp, gõ lệnh ở dòng nhập phía dưới:
+
+```
+nhan 1 1            nhận làm đơn 1, món 1
+giahan 1 1 3        gia hạn 3 phút
+xong 1 1            xong sớm
+het M01 Hết nước    báo hết món M01
+```
+
 ## Phân công (tìm chữ TODO trong mã)
 
 | Người | Phần việc | Tệp chính |
 | --- | --- | --- |
-| Nam | Máy chủ: nhận làm, gia hạn, bộ hẹn giờ, điều phối thiết bị rung, SSE, heartbeat, lưu file | `OrderStore`, `ClientHandler`, `WebGateway`, thêm `KitchenTimer`, `PagerDispatcher`, `DataFile` |
-| Cường | Quầy quản lý (Swing), quản lý món, hủy món; trang gọi món | `ServerApp`, `MenuStore`, `web/order.html` |
-| Khoa | Masterchef Display (Swing): theo đơn, gộp theo món, đồng hồ, gia hạn; trang thiết bị rung | `MasterchefApp`, `web/pager.html` |
+| Nam | Máy chủ đã xong phần lõi. Còn: kiểm thử, ảnh Wireshark, PROTOCOL.md, báo cáo, tích hợp giao diện | `kos/server/*` |
+| Cường | Giao diện quầy quản lý (Swing): thẻ Đơn hàng, Thực đơn, Thiết bị, Log; trang gọi món hiện trạng thái đơn | `ServerApp` (đọc ghi chú đầu file), `web/order.html` |
+| Khoa | Masterchef Display (Swing): theo đơn, gộp theo món, đồng hồ, nhận làm, gia hạn, xong sớm, báo hết món; làm đẹp trang thiết bị rung | `MasterchefApp`, `ServerConnection`, `web/pager.html` |
 
 Quy tắc: không gõ tên lệnh trực tiếp, luôn dùng hằng số trong `Protocol.java`. Muốn đổi giao thức thì báo Nam.
 Làm trên nhánh riêng (`ten/viec-dang-lam`), gộp vào `main` bằng pull request.

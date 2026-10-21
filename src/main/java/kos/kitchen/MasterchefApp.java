@@ -16,6 +16,7 @@ import java.util.Scanner;
  *   nhan  &lt;đơn&gt; &lt;món&gt;          nhận làm (START_ITEMS)
  *   giahan &lt;đơn&gt; &lt;món&gt; &lt;phút&gt;  gia hạn (EXTEND_ITEMS)
  *   xong  &lt;đơn&gt; &lt;món&gt;          xong sớm (FINISH_ITEMS)
+ *   het   &lt;mã món&gt; [lý do]     báo hết món (SOLD_OUT), ví dụ: het M01 Hết nước lẩu
  * hoặc gõ thẳng một dòng JSON.
  * TODO (Khoa): giao diện Swing - xem theo đơn, gộp theo món, nhận làm, đồng hồ, gia hạn,
  * xong sớm, báo hết món (F04 - F07). Dùng lại ServerConnection như ở đây.
@@ -55,7 +56,7 @@ public class MasterchefApp {
         holder[0] = conn;
         conn.start();
 
-        System.out.println("Lệnh: nhan <đơn> <món> | giahan <đơn> <món> <phút> | xong <đơn> <món> | exit");
+        System.out.println("Lệnh: nhan <đơn> <món> | giahan <đơn> <món> <phút> | xong <đơn> <món> | het <mã món> [lý do] | exit");
         try (Scanner sc = new Scanner(System.in, "UTF-8")) {
             while (sc.hasNextLine()) {
                 String line = sc.nextLine().trim();
@@ -78,6 +79,13 @@ public class MasterchefApp {
 
     private static Message shortcut(String line, ServerConnection conn) {
         String[] p = line.split("\\s+");
+        if (p[0].equalsIgnoreCase("het")) {
+            Message m = new Message(Protocol.SOLD_OUT);
+            m.reqId = conn.nextReqId();
+            m.menuId = p[1];
+            m.reason = p.length > 2 ? line.substring(line.indexOf(p[2])) : "Hết món";
+            return m;
+        }
         String cmd = switch (p[0].toLowerCase()) {
             case "nhan" -> Protocol.START_ITEMS;
             case "giahan" -> Protocol.EXTEND_ITEMS;

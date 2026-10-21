@@ -1,15 +1,12 @@
 package kos.server;
 
 import com.sun.net.httpserver.HttpExchange;
-import kos.common.Json;
 import kos.common.Message;
 import kos.common.Order;
 import kos.common.OrderItem;
 import kos.common.Protocol;
 
 import java.io.IOException;
-import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -29,41 +26,9 @@ import java.util.concurrent.TimeUnit;
  *       vẫn không có thì chuyển lệnh cho mọi thiết bị rung đang kết nối.</li>
  *   <li>Quá 60 giây chưa ai bấm "Đã lấy món" thì rung lại.</li>
  * </ul>
+ * Bộ định kỳ của lớp này cũng kiểm tra bảng thiết bị web và giữ kết nối SSE của trang gọi món.
  */
 public class PagerDispatcher {
-
-    /** Một kết nối SSE của một trang thiết bị rung. */
-    private static final class SseClient {
-        final int pagerId;
-        final String ip;
-        final HttpExchange exchange;
-        final OutputStream out;
-
-        SseClient(int pagerId, HttpExchange exchange) {
-            this.pagerId = pagerId;
-            this.exchange = exchange;
-            this.out = exchange.getResponseBody();
-            this.ip = exchange.getRemoteAddress().getAddress().getHostAddress();
-        }
-
-        synchronized boolean write(String chunk) {
-            try {
-                out.write(chunk.getBytes(StandardCharsets.UTF_8));
-                out.flush();
-                return true;
-            } catch (IOException e) {
-                return false;
-            }
-        }
-
-        void close() {
-            try {
-                exchange.close();
-            } catch (RuntimeException ignored) {
-                // bỏ qua
-            }
-        }
-    }
 
     /** Một lệnh rung đang mở (chưa ai bấm "Đã lấy món"). */
     private static final class Call {
@@ -78,10 +43,13 @@ public class PagerDispatcher {
         long lastSent;
     }
 
+    /** Kết nối SSE kèm số thiết bị rung. */
+    private record PagerConn(int pagerId, SseClient sse) { }
+
     private static final long BATCH_DELAY_MS = 1_000;
 
     private final ServerContext ctx;
-    private final List<SseClient> clients = new CopyOnWriteArrayList<>();
+    private final List<PagerConn> clients = new CopyOnWriteArrayList<>();
     /** Các lệnh đang mở theo call_id. Truy cập trong synchronized(this). */
     private final Map<String, Call> calls = new LinkedHashMap<>();
     /** Món đã xong đang chờ gom theo order_id. Truy cập trong synchronized(this). */
@@ -99,15 +67,15 @@ public class PagerDispatcher {
     }
 
     public void start() {
-        exec.scheduleAtFixedRate(this::safeTick, 1, 1, TimeUnit.SECONDS);
-        exec.scheduleAtFixedRate(this::keepAlive, Protocol.PING_INTERVAL_MS, Protocol.PING_INTERVAL_MS,
+        exec.scheduleAtFixedRate(() -> safe(this::tick), 1, 1, TimeUnit.SECONDS);
+        exec.scheduleAtFixedRate(() -> safe(this::keepAlive), Protocol.PING_INTERVAL_MS, Protocol.PING_INTERVAL_MS,
                 TimeUnit.MILLISECONDS);
     }
 
     public void shutdown() {
         exec.shutdownNow();
-        for (SseClient c : clients) {
-            c.close();
+        for (PagerConn c : clients) {
+            c.sse().close();
         }
     }
 
@@ -115,21 +83,17 @@ public class PagerDispatcher {
 
     /** GET /api/pager/events?id=N: giữ kết nối mở, không đóng exchange. */
     public void register(HttpExchange ex, int pagerId) throws IOException {
-        ex.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
-        ex.getResponseHeaders().set("Cache-Control", "no-cache");
-        ex.sendResponseHeaders(200, 0);
-        SseClient client = new SseClient(pagerId, ex);
-        if (!client.write(": connected\n\n")) {
-            client.close();
+        SseClient sse = SseClient.open(ex, String.valueOf(pagerId));
+        if (sse == null) {
             return;
         }
-        clients.add(client);
-        ctx.log("Thiết bị rung " + pagerId + " kết nối [" + client.ip + "]");
+        clients.add(new PagerConn(pagerId, sse));
+        ctx.devices().touch(DeviceRegistry.TYPE_PAGER, String.valueOf(pagerId), sse.ip);
         // Gửi lại các lệnh còn mở của thiết bị này (ví dụ sau khi mất kết nối).
         synchronized (this) {
             for (Call call : calls.values()) {
                 if (call.pagerId == pagerId || call.forwarded) {
-                    client.write(event(Protocol.PAGER_CALL, toMessage(call)));
+                    sse.write(SseClient.event(Protocol.PAGER_CALL, toMessage(call)));
                 }
             }
         }
@@ -191,30 +155,67 @@ public class PagerDispatcher {
 
     /** POST /api/pager/ack: phục vụ bấm "Đã lấy món". */
     public boolean onPickedUp(String callId, Integer pagerId) {
-        Call call;
-        synchronized (this) {
-            call = callId == null ? null : calls.remove(callId);
-            if (call == null) {
-                return false;
-            }
-            Message close = new Message(Protocol.PAGER_CLOSE);
-            close.callId = callId;
-            broadcastEvent(Protocol.PAGER_CLOSE, close); // các thiết bị khác (nếu được chuyển tiếp) tắt chuông
+        Call call = close(callId);
+        if (call == null) {
+            return false;
         }
         ctx.log("Thiết bị rung " + pagerId + " đã lấy món (" + callId + ", bàn " + call.table + ")");
+        ctx.kitchen().onPickedUp(call.orderId, itemNos(call), "Thiết bị rung " + pagerId);
+        return true;
+    }
+
+    /**
+     * Quản lý xác nhận thủ công tại quầy khi không có thiết bị rung nào phản hồi.
+     * TODO (Cường): nút "Đã lấy món" trên thẻ Đơn hàng gọi hàm này với call_id hiện trên bảng lệnh rung.
+     */
+    public boolean confirmManually(String callId) {
+        Call call = close(callId);
+        if (call == null) {
+            return false;
+        }
+        ctx.log("Quản lý xác nhận đã lấy món (" + callId + ", bàn " + call.table + ")");
+        ctx.kitchen().onPickedUp(call.orderId, itemNos(call), "Quản lý");
+        return true;
+    }
+
+    /** Danh sách lệnh rung đang mở, dạng chữ, cho giao diện quầy. */
+    public synchronized List<String> describeOpenCalls() {
+        List<String> list = new ArrayList<>();
+        for (Call c : calls.values()) {
+            list.add(c.callId + " - bàn " + c.table + " - thiết bị " + c.pagerId
+                    + (c.forwarded ? " (đã chuyển tiếp)" : c.received ? " (đã nhận)" : " (chưa xác nhận)"));
+        }
+        return list;
+    }
+
+    private synchronized Call close(String callId) {
+        Call call = callId == null ? null : calls.remove(callId);
+        if (call != null) {
+            Message close = new Message(Protocol.PAGER_CLOSE);
+            close.callId = callId;
+            String chunk = SseClient.event(Protocol.PAGER_CLOSE, close);
+            for (PagerConn c : clients) {
+                if (!c.sse().write(chunk)) {
+                    drop(c);
+                }
+            }
+        }
+        return call;
+    }
+
+    private static List<Integer> itemNos(Call call) {
         List<Integer> nos = new ArrayList<>();
         for (OrderItem it : call.items) {
             nos.add(it.itemNo);
         }
-        ctx.kitchen().onPickedUp(call.orderId, nos, "Thiết bị rung " + pagerId);
-        return true;
+        return nos;
     }
 
     // ------------------------------------------------------------------ theo dõi định kỳ
 
-    private void safeTick() {
+    private void safe(Runnable r) {
         try {
-            tick();
+            r.run();
         } catch (RuntimeException e) {
             e.printStackTrace();
         }
@@ -245,14 +246,16 @@ public class PagerDispatcher {
                 deliver(call);
             }
         }
+        ctx.devices().check();
     }
 
     private void keepAlive() {
-        for (SseClient c : clients) {
-            if (!c.write(": ping\n\n")) {
+        for (PagerConn c : clients) {
+            if (!c.sse().ping()) {
                 drop(c);
             }
         }
+        ctx.webHub().keepAlive();
     }
 
     // ------------------------------------------------------------------ gửi
@@ -260,11 +263,11 @@ public class PagerDispatcher {
     /** Gửi lệnh tới thiết bị đích (hoặc mọi thiết bị nếu đã chuyển tiếp). Trả về số thiết bị đã gửi. */
     private int deliver(Call call) {
         call.lastSent = System.currentTimeMillis();
-        String chunk = event(Protocol.PAGER_CALL, toMessage(call));
+        String chunk = SseClient.event(Protocol.PAGER_CALL, toMessage(call));
         int n = 0;
-        for (SseClient c : clients) {
-            if (call.forwarded || c.pagerId == call.pagerId) {
-                if (c.write(chunk)) {
+        for (PagerConn c : clients) {
+            if (call.forwarded || c.pagerId() == call.pagerId) {
+                if (c.sse().write(chunk)) {
                     n++;
                 } else {
                     drop(c);
@@ -274,19 +277,10 @@ public class PagerDispatcher {
         return n;
     }
 
-    private void broadcastEvent(String name, Message m) {
-        String chunk = event(name, m);
-        for (SseClient c : clients) {
-            if (!c.write(chunk)) {
-                drop(c);
-            }
-        }
-    }
-
-    private void drop(SseClient c) {
+    private void drop(PagerConn c) {
         if (clients.remove(c)) {
-            c.close();
-            ctx.log("Thiết bị rung " + c.pagerId + " mất kết nối [" + c.ip + "]");
+            c.sse().close();
+            ctx.log("Thiết bị rung " + c.pagerId() + " ngắt kết nối sự kiện [" + c.sse().ip + "]");
         }
     }
 
@@ -298,10 +292,5 @@ public class PagerDispatcher {
         m.table = call.table;
         m.items = call.items;
         return m;
-    }
-
-    /** Định dạng một sự kiện SSE: dòng event, dòng data, một dòng trống. */
-    private static String event(String name, Message m) {
-        return "event: " + name + "\ndata: " + Json.toLine(m) + "\n\n";
     }
 }

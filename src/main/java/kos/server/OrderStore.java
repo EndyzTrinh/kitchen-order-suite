@@ -1,6 +1,8 @@
 package kos.server;
 
+import com.google.gson.JsonParseException;
 import kos.common.ItemStatus;
+import kos.common.Json;
 import kos.common.MenuItem;
 import kos.common.Order;
 import kos.common.OrderItem;
@@ -14,10 +16,9 @@ import java.util.Map;
 
 /**
  * Nơi duy nhất giữ và thay đổi trạng thái đơn. Mọi phương thức thay đổi dữ liệu đều synchronized
- * vì được gọi từ nhiều luồng: ClientHandler (masterchef), WebGateway (trang web), KitchenTimer (hết giờ).
- * Nhờ vậy khi hết giờ đúng lúc masterchef bấm gia hạn, chỉ một thay đổi được áp dụng trước,
- * thay đổi sau được kiểm tra lại trạng thái.
- * TODO (Nam): soldOut, cancelItem, lưu file (F07, F10, F12).
+ * vì được gọi từ nhiều luồng: ClientHandler (masterchef), WebGateway (trang web), KitchenTimer (hết giờ),
+ * giao diện quầy quản lý. Nhờ vậy khi hết giờ đúng lúc masterchef bấm gia hạn, chỉ một thay đổi
+ * được áp dụng trước, thay đổi sau được kiểm tra lại trạng thái.
  */
 public class OrderStore {
 
@@ -29,6 +30,13 @@ public class OrderStore {
 
     /** Kết quả của một lệnh áp dụng cho nhiều món: món nào đổi được, món nào lỗi. */
     public record BatchResult(List<Change> changed, List<String> errors) { }
+
+    /** Dữ liệu ghi ra orders.json. */
+    private static final class State {
+        int nextOrderId;
+        List<Order> orders;
+        Map<String, Integer> handledRequests;
+    }
 
     private static final long MINUTE_MS = 60_000L;
 
@@ -51,7 +59,10 @@ public class OrderStore {
         }
         Integer existing = handledRequests.get(reqId);
         if (existing != null) {
-            return new AddResult(orders.get(existing), null, true);
+            Order o = orders.get(existing);
+            return o == null
+                    ? new AddResult(null, "Đơn này đã gửi và đã hoàn tất", false)
+                    : new AddResult(o, null, true);
         }
         if (table == null || table < 1) {
             return new AddResult(null, "Số bàn không hợp lệ", false);
@@ -170,6 +181,41 @@ public class OrderStore {
         return new BatchResult(changed, errors);
     }
 
+    /** Báo hết món (F07): hủy mọi phần của món này còn đang chờ nhận làm; phần đang làm giữ nguyên. */
+    public synchronized List<Change> cancelPendingByMenu(String menuId, String reason) {
+        List<Change> changed = new ArrayList<>();
+        for (Order o : orders.values()) {
+            for (OrderItem it : o.items) {
+                if (menuId.equals(it.menuId) && it.status == ItemStatus.PENDING) {
+                    it.status = ItemStatus.CANCELLED;
+                    it.reason = reason;
+                    changed.add(new Change(o, it));
+                }
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * Quản lý hủy một món (F10). Chỉ hủy được khi bếp chưa nhận làm.
+     *
+     * @return thay đổi; ném IllegalStateException kèm lý do nếu không hủy được
+     */
+    public synchronized Change cancelItem(int orderId, int itemNo, String reason) {
+        List<String> errors = new ArrayList<>();
+        Change c = locate(OrderItem.ref(orderId, itemNo), errors);
+        if (c == null) {
+            throw new IllegalStateException(errors.get(0));
+        }
+        if (c.item().status != ItemStatus.PENDING) {
+            throw new IllegalStateException(label(c) + (c.item().status == ItemStatus.COOKING
+                    ? ": bếp đã nhận làm, không hủy được" : " đang ở trạng thái " + c.item().status));
+        }
+        c.item().status = ItemStatus.CANCELLED;
+        c.item().reason = reason;
+        return c;
+    }
+
     /**
      * Bộ hẹn giờ gọi khi đến hạn. Chỉ chuyển READY nếu món vẫn đang làm và hạn giờ không đổi
      * (nếu masterchef đã gia hạn thì lần hẹn giờ cũ này bị bỏ qua, lần hẹn giờ mới sẽ xử lý).
@@ -186,7 +232,7 @@ public class OrderStore {
         return new Change(o, it);
     }
 
-    /** Phục vụ đã lấy món: READY -> SERVED. */
+    /** Phục vụ đã lấy món (hoặc quản lý xác nhận thủ công): READY -> SERVED. */
     public synchronized List<Change> markServed(int orderId, List<Integer> itemNos) {
         List<Change> changed = new ArrayList<>();
         Order o = orders.get(orderId);
@@ -215,6 +261,59 @@ public class OrderStore {
         }
         return list;
     }
+
+    /** Các món đang ở một trạng thái (dùng khi khởi động lại để đặt lại đồng hồ, gửi lại lệnh rung). */
+    public synchronized List<Change> itemsWithStatus(ItemStatus status) {
+        List<Change> list = new ArrayList<>();
+        for (Order o : orders.values()) {
+            for (OrderItem it : o.items) {
+                if (it.status == status) {
+                    list.add(new Change(o, it));
+                }
+            }
+        }
+        return list;
+    }
+
+    // ------------------------------------------------------------------ lưu và khôi phục (F12)
+
+    /** JSON của các đơn chưa hoàn tất, tạo trong lúc giữ khóa nên không bị đọc dở. */
+    public synchronized String exportJson() {
+        State s = new State();
+        s.nextOrderId = nextOrderId;
+        s.orders = getOpenOrders();
+        s.handledRequests = new HashMap<>();
+        for (Map.Entry<String, Integer> e : handledRequests.entrySet()) {
+            Order o = orders.get(e.getValue());
+            if (o != null && !o.isFinished()) {
+                s.handledRequests.put(e.getKey(), e.getValue());
+            }
+        }
+        // Dọn đơn đã hoàn tất khỏi bộ nhớ, chúng không cần nữa.
+        orders.values().removeIf(Order::isFinished);
+        return Json.GSON.toJson(s);
+    }
+
+    /** Nạp lại dữ liệu từ JSON. Ném JsonParseException nếu file hỏng. */
+    public synchronized void importJson(String json) {
+        State s = Json.GSON.fromJson(json, State.class);
+        if (s == null) {
+            throw new JsonParseException("File rỗng");
+        }
+        orders.clear();
+        handledRequests.clear();
+        if (s.orders != null) {
+            for (Order o : s.orders) {
+                orders.put(o.orderId, o);
+            }
+        }
+        if (s.handledRequests != null) {
+            handledRequests.putAll(s.handledRequests);
+        }
+        nextOrderId = Math.max(1, s.nextOrderId);
+    }
+
+    // ------------------------------------------------------------------
 
     private Change locate(OrderItem ref, List<String> errors) {
         if (ref == null || ref.orderId == null || ref.itemNo == null) {

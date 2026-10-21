@@ -14,8 +14,14 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Điểm khởi động máy chủ. Bản khung chạy trên console để thử mạng.
+ * Điểm khởi động máy chủ. Hiện chạy trên console.
  * TODO (Cường): giao diện Swing của quầy quản lý (thẻ Đơn hàng, Thực đơn, Thiết bị, Log).
+ * Giao diện chỉ cần gọi các hàm có sẵn qua ServerContext:
+ *   ctx.orders().getOpenOrders()                  danh sách đơn
+ *   ctx.kitchen().cancelItem(đơn, món, lý do, "Quản lý")   hủy món chưa làm
+ *   ctx.pagers().describeOpenCalls() / confirmManually(callId)   lệnh rung đang mở, xác nhận thủ công
+ *   ctx.menu().addOrUpdate / delete / setSoldOut rồi ctx.menuChanged()   quản lý món
+ *   ctx.devices().getAll(), ctx.clients().getAll()   bảng thiết bị
  */
 public class ServerApp {
 
@@ -24,13 +30,35 @@ public class ServerApp {
         menu.load();
         OrderStore orders = new OrderStore(menu);
         ServerContext ctx = new ServerContext(menu, orders);
+        ctx.log("Đã nạp " + menu.getAll().size() + " món");
+        restoreOrders(ctx);
 
         new WebGateway(ctx).start();
         ctx.pagers().start();
         startTcp(ctx);
+        ctx.kitchen().resume();
 
-        ctx.log("Đã nạp " + menu.getAll().size() + " món");
         printAddresses(ctx);
+    }
+
+    /** Nạp lại các đơn chưa hoàn tất từ data/orders.json (F12). File hỏng thì đổi tên và chạy với dữ liệu rỗng. */
+    private static void restoreOrders(ServerContext ctx) {
+        try {
+            String json = DataFile.read(DataFile.ORDERS);
+            if (json == null) {
+                return;
+            }
+            try {
+                ctx.orders().importJson(json);
+                ctx.log("Đã khôi phục " + ctx.orders().getOpenOrders().size() + " đơn chưa hoàn tất");
+            } catch (RuntimeException e) {
+                java.nio.file.Path bad = DataFile.quarantine(DataFile.ORDERS);
+                ctx.log("CẢNH BÁO: orders.json bị hỏng, đã đổi tên thành " + bad.getFileName()
+                        + ", khởi động với danh sách đơn rỗng");
+            }
+        } catch (IOException e) {
+            ctx.log("CẢNH BÁO: không đọc được orders.json: " + e.getMessage());
+        }
     }
 
     private static void startTcp(ServerContext ctx) throws IOException {

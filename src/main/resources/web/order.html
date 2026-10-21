@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gọi món</title>
-<!-- Bản khung (TODO Cường, F02): hoàn thiện giao diện, xem trạng thái đơn qua SSE, tự cập nhật thực đơn. -->
+<!-- Đã có: gọi món, tự cập nhật thực đơn, heartbeat. TODO (Cường, F02): làm đẹp giao diện, hiện trạng thái đơn đã gửi. -->
 <style>
   body { font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 16px; background: #f6f6f4; color: #222; }
   h1 { font-size: 22px; margin: 0 0 12px; }
@@ -44,28 +44,40 @@ function fmt(n) { return n.toLocaleString('vi-VN') + 'đ'; }
 async function loadMenu() {
   const res = await fetch('/api/menu');
   const data = await res.json();
+  renderMenu(data.menu);
+}
+
+// Vẽ thực đơn; giữ nguyên số lượng và ghi chú đang chọn khi thực đơn được cập nhật.
+function renderMenu(menu) {
+  const notes = {};
+  document.querySelectorAll('.note').forEach(n => notes[n.dataset.id] = n.value);
   const box = document.getElementById('menu');
   box.innerHTML = '';
-  for (const m of data.menu) {
-    qty[m.menu_id] = 0;
+  for (const m of menu) {
+    if (m.sold_out || qty[m.menu_id] === undefined) qty[m.menu_id] = 0;
     const div = document.createElement('div');
     div.className = 'item' + (m.sold_out ? ' soldout' : '');
     div.innerHTML =
-      '<div class="top"><div><div>' + m.name + '</div><div class="price">' + fmt(m.price) +
-      ' · ' + m.prep_minutes + ' phút</div></div>' +
-      '<div class="qty"><button data-d="-1">−</button><span>0</span><button data-d="1">+</button></div></div>' +
+      '<div class="top"><div><div>' + m.name + (m.sold_out ? ' (tạm hết)' : '') + '</div><div class="price">' +
+      fmt(m.price) + ' · ' + m.prep_minutes + ' phút</div></div>' +
+      '<div class="qty"><button data-d="-1">−</button><span>' + qty[m.menu_id] +
+      '</span><button data-d="1">+</button></div></div>' +
       '<input class="note" maxlength="100" placeholder="Ghi chú (ít cay, không hành...)">';
     const span = div.querySelector('span');
     const note = div.querySelector('.note');
+    note.dataset.id = m.menu_id;
+    note.value = notes[m.menu_id] || '';
+    note.style.display = qty[m.menu_id] > 0 ? 'block' : 'none';
     div.querySelectorAll('button').forEach(b => b.onclick = () => {
       if (m.sold_out) return;
       qty[m.menu_id] = Math.max(0, qty[m.menu_id] + Number(b.dataset.d));
       span.textContent = qty[m.menu_id];
       note.style.display = qty[m.menu_id] > 0 ? 'block' : 'none';
     });
-    note.dataset.id = m.menu_id;
     box.appendChild(div);
   }
+  // món đã bị xóa khỏi thực đơn thì bỏ khỏi đơn nháp
+  for (const id in qty) if (!menu.some(m => m.menu_id === id)) delete qty[id];
 }
 
 document.getElementById('send').onclick = async () => {
@@ -96,6 +108,8 @@ document.getElementById('send').onclick = async () => {
     const data = await res.json();
     if (data.command === 'ORDER_ACK') {
       result.textContent = 'Đã gửi - đơn số ' + data.order_id + (data.kitchen_online ? '' : ' (bếp chưa kết nối!)');
+      for (const id in qty) qty[id] = 0;
+      document.querySelectorAll('.note').forEach(n => n.value = '');
       loadMenu();
     } else {
       result.textContent = 'Lỗi: ' + data.message;
@@ -107,6 +121,21 @@ document.getElementById('send').onclick = async () => {
 };
 
 loadMenu().catch(() => document.getElementById('menu').textContent = 'Không tải được thực đơn');
+
+// ---------- kết nối sự kiện và heartbeat (F11) ----------
+function deviceName() { return document.getElementById('device').value.trim() || 'WEB'; }
+
+const events = new EventSource('/api/events?name=' + encodeURIComponent(deviceName()));
+events.addEventListener('MENU_UPDATE', e => {
+  renderMenu(JSON.parse(e.data).menu);
+  document.getElementById('result').textContent = 'Thực đơn vừa được cập nhật';
+});
+// TODO (Cường): dùng ORDER_NEW và ITEM_UPDATE để hiện trạng thái các đơn đã gửi.
+
+setInterval(() => {
+  fetch('/api/heartbeat', { method: 'POST', body: JSON.stringify({ command: 'PING', name: deviceName() }) })
+    .catch(() => {});
+}, 5000);
 </script>
 </body>
 </html>
