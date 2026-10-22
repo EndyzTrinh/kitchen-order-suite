@@ -1,0 +1,6 @@
+{"command":"NEW_ORDER","req_id":"BAD-1","name":"TEST","pager_id":1,"items":[{"menu_id":"M03","qty":1}]}
+{"command":"NEW_ORDER","req_id":"BAD-2","name":"TEST","table":5,"pager_id":1,"items":[{"menu_id":"M03","qty":0}]}
+{"command":"NEW_ORDER","req_id":"BAD-3","name":"TEST","table":5,"pager_id":1,"items":[{"menu_id":"X99","qty":1}]}
+{"command":"NEW_ORDER","req_id":"BAD-4","name":"TEST","table":5,"items":[{"menu_id":"M03","qty":1}]}
+{"command":"NEW_ORDER","req_id":"BAD-5","name":"TEST","table":5,"pager_id":1,"items":[]}
+khong phai json

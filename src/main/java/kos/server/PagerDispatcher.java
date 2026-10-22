@@ -41,7 +41,13 @@ public class PagerDispatcher {
         boolean resent;
         boolean forwarded;
         long lastSent;
+        /** Thời điểm tạo lệnh, để quầy biết món đã chờ lấy bao lâu. */
+        long createdAt;
     }
+
+    /** Bản sao một lệnh rung đang mở, cho thẻ Đơn hàng của quầy quản lý. */
+    public record OpenCall(String callId, int pagerId, int orderId, int table, List<Integer> itemNos,
+                           String itemsText, boolean received, boolean forwarded, long createdAt) { }
 
     /** Kết nối SSE kèm số thiết bị rung. */
     private record PagerConn(int pagerId, SseClient sse) { }
@@ -132,6 +138,7 @@ public class PagerDispatcher {
         call.orderId = orderId;
         call.table = order.table;
         call.items = items;
+        call.createdAt = System.currentTimeMillis();
         calls.put(call.callId, call);
         int n = deliver(call);
         ctx.log("Gọi thiết bị rung " + call.pagerId + " (" + call.callId + ", bàn " + call.table + ")"
@@ -166,7 +173,7 @@ public class PagerDispatcher {
 
     /**
      * Quản lý xác nhận thủ công tại quầy khi không có thiết bị rung nào phản hồi.
-     * TODO (Cường): nút "Đã lấy món" trên thẻ Đơn hàng gọi hàm này với call_id hiện trên bảng lệnh rung.
+     * Gọi từ nút "Xác nhận đã lấy" trên thẻ Đơn hàng.
      */
     public boolean confirmManually(String callId) {
         Call call = close(callId);
@@ -184,6 +191,23 @@ public class PagerDispatcher {
         for (Call c : calls.values()) {
             list.add(c.callId + " - bàn " + c.table + " - thiết bị " + c.pagerId
                     + (c.forwarded ? " (đã chuyển tiếp)" : c.received ? " (đã nhận)" : " (chưa xác nhận)"));
+        }
+        return list;
+    }
+
+    /** Các lệnh rung đang mở (bản sao), cho bảng lệnh rung trên thẻ Đơn hàng. */
+    public synchronized List<OpenCall> getOpenCalls() {
+        List<OpenCall> list = new ArrayList<>();
+        for (Call c : calls.values()) {
+            StringBuilder text = new StringBuilder();
+            for (OrderItem it : c.items) {
+                if (text.length() > 0) {
+                    text.append(", ");
+                }
+                text.append(it.name).append(" x").append(it.qty);
+            }
+            list.add(new OpenCall(c.callId, c.pagerId, c.orderId, c.table, itemNos(c), text.toString(),
+                    c.received, c.forwarded, c.createdAt));
         }
         return list;
     }
