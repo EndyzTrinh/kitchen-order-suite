@@ -1,0 +1,5 @@
+xin chao
+{"command":"HELLO"
+{"name":"thieu truong command"}
+{"command":"FOO"}
+{"command":"START_ITEMS","req_id":"X-1","items":[{"order_id":1,"item_no":1}]}

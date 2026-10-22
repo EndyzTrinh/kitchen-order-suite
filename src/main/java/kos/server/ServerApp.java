@@ -1,7 +1,10 @@
 package kos.server;
 
 import kos.common.Protocol;
+import kos.server.ui.AdminWindow;
 
+import javax.swing.JOptionPane;
+import java.awt.GraphicsEnvironment;
 import java.io.IOException;
 import java.net.BindException;
 import java.net.Inet4Address;
@@ -11,23 +14,24 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Scanner;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Điểm khởi động máy chủ. Hiện chạy trên console.
- * TODO (Cường): giao diện Swing của quầy quản lý (thẻ Đơn hàng, Thực đơn, Thiết bị, Log).
- * Giao diện chỉ cần gọi các hàm có sẵn qua ServerContext:
- *   ctx.orders().getOpenOrders()                  danh sách đơn
- *   ctx.kitchen().cancelItem(đơn, món, lý do, "Quản lý")   hủy món chưa làm
- *   ctx.pagers().describeOpenCalls() / confirmManually(callId)   lệnh rung đang mở, xác nhận thủ công
- *   ctx.menu().addOrUpdate / delete / setSoldOut rồi ctx.menuChanged()   quản lý món
- *   ctx.devices().getAll(), ctx.clients().getAll()   bảng thiết bị
+ * Điểm khởi động máy chủ kiêm quầy quản lý.
+ * Có màn hình thì mở cửa sổ quầy quản lý (kos.server.ui.AdminWindow: thẻ Đơn hàng, Thực đơn, Thiết bị, Log);
+ * không có màn hình (chạy với -Djava.awt.headless=true) thì chạy trên console như cũ.
+ * Tắt máy chủ: đóng cửa sổ quầy, hoặc gõ exit ở console.
  */
 public class ServerApp {
+
+    private static final AtomicBoolean SHUTTING_DOWN = new AtomicBoolean();
 
     public static void main(String[] args) throws IOException {
         MenuStore menu = new MenuStore();
@@ -48,13 +52,23 @@ public class ServerApp {
             ctx.log("   netstat -ano | findstr \":" + Protocol.HTTP_PORT + " :" + Protocol.TCP_PORT + "\"");
             ctx.log("rồi tắt chương trình ở dòng LISTENING bằng: taskkill /PID <số cuối dòng> /F");
             web.stop();
+            if (!GraphicsEnvironment.isHeadless()) {
+                JOptionPane.showMessageDialog(null, "Cổng " + Protocol.HTTP_PORT + " hoặc " + Protocol.TCP_PORT
+                        + " đang bị chiếm.\nThường là ServerApp lần trước chưa tắt hẳn: tắt nó rồi chạy lại.",
+                        "Không khởi động được máy chủ", JOptionPane.ERROR_MESSAGE);
+            }
             System.exit(1);
             return;
         }
         ctx.pagers().start();
         ctx.kitchen().resume();
-        printAddresses(ctx);
-        ctx.log("Gõ exit rồi Enter (ở dòng nhập phía dưới Output) để tắt máy chủ đúng cách.");
+        List<String> addresses = printAddresses(ctx);
+        if (GraphicsEnvironment.isHeadless()) {
+            ctx.log("Gõ exit rồi Enter (ở dòng nhập phía dưới Output) để tắt máy chủ đúng cách.");
+        } else {
+            AdminWindow.open(ctx, addresses, () -> shutdown(ctx, web, tcp));
+            ctx.log("Đã mở cửa sổ quầy quản lý. Tắt máy chủ: đóng cửa sổ quầy, hoặc gõ exit ở đây.");
+        }
 
         waitForExit(ctx, web, tcp);
     }
@@ -76,6 +90,14 @@ public class ServerApp {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
+        }
+        shutdown(ctx, web, tcp);
+    }
+
+    /** Tắt sạch máy chủ. Gọi từ console (exit) hoặc khi đóng cửa sổ quầy; chỉ chạy một lần. */
+    private static void shutdown(ServerContext ctx, WebGateway web, ServerSocket tcp) {
+        if (!SHUTTING_DOWN.compareAndSet(false, true)) {
+            return;
         }
         ctx.log("Đang tắt máy chủ...");
         ctx.save();
@@ -133,8 +155,9 @@ public class ServerApp {
         return serverSocket;
     }
 
-    /** In các địa chỉ IPv4 của máy để biết cần mở địa chỉ nào trên iPad / iPhone. */
-    private static void printAddresses(ServerContext ctx) throws SocketException {
+    /** In các địa chỉ IPv4 của máy để biết cần mở địa chỉ nào trên iPad / iPhone; trả về danh sách IP. */
+    private static List<String> printAddresses(ServerContext ctx) throws SocketException {
+        List<String> ips = new ArrayList<>();
         for (NetworkInterface ni : Collections.list(NetworkInterface.getNetworkInterfaces())) {
             if (!ni.isUp() || ni.isLoopback() || ni.isVirtual()) {
                 continue;
@@ -142,10 +165,12 @@ public class ServerApp {
             for (InetAddress addr : Collections.list(ni.getInetAddresses())) {
                 if (addr instanceof Inet4Address) {
                     String ip = addr.getHostAddress();
+                    ips.add(ip);
                     ctx.log(ni.getDisplayName() + ": gọi món http://" + ip + ":" + Protocol.HTTP_PORT
                             + "/order  |  thiết bị rung http://" + ip + ":" + Protocol.HTTP_PORT + "/pager?id=1");
                 }
             }
         }
+        return ips;
     }
 }

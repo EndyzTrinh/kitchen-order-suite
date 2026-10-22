@@ -6,15 +6,24 @@ import kos.common.Protocol;
 import java.io.IOException;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 
 /**
  * Gom các thành phần dùng chung của máy chủ để truyền cho ClientHandler, WebGateway, KitchenController
- * và giao diện quầy quản lý.
- * TODO (Cường): chuyển log() sang thẻ Log của giao diện quầy quản lý.
+ * và giao diện quầy quản lý. log() vừa in ra console vừa đẩy sang thẻ Log của quầy quản lý.
  */
 public class ServerContext {
 
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
+    private static final int MAX_RECENT_LOG = 500;
+
+    private final Deque<String> recentLog = new ArrayDeque<>();
+    private final List<Consumer<String>> logListeners = new CopyOnWriteArrayList<>();
 
     private final MenuStore menu;
     private final OrderStore orders;
@@ -87,7 +96,33 @@ public class ServerContext {
         }
     }
 
+    /**
+     * Ghi một dòng log: in ra console và gửi tới các nơi đăng ký (thẻ Log của quầy quản lý).
+     * Gọi được từ mọi luồng.
+     */
     public void log(String text) {
-        System.out.println("[" + LocalTime.now().format(TIME) + "] " + text);
+        String line = "[" + LocalTime.now().format(TIME) + "] " + text;
+        System.out.println(line);
+        synchronized (recentLog) {
+            recentLog.addLast(line);
+            if (recentLog.size() > MAX_RECENT_LOG) {
+                recentLog.removeFirst();
+            }
+        }
+        for (Consumer<String> l : logListeners) {
+            l.accept(line);
+        }
+    }
+
+    /** Đăng ký nhận từng dòng log mới (Cường: thẻ Log của quầy quản lý). */
+    public void addLogListener(Consumer<String> listener) {
+        logListeners.add(listener);
+    }
+
+    /** Các dòng log gần nhất, để giao diện mở sau vẫn thấy log lúc khởi động. */
+    public List<String> recentLog() {
+        synchronized (recentLog) {
+            return new ArrayList<>(recentLog);
+        }
     }
 }

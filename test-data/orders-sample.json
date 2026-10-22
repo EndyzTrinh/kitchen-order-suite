@@ -1,0 +1,14 @@
+{
+  "next_order_id": 4,
+  "orders": [
+    {"order_id": 1, "table": 2, "pager_id": 1, "waiter": "IPAD1", "created_at": 1792630000000,
+     "items": [{"item_no": 1, "menu_id": "M03", "name": "Phở bò tái", "qty": 2, "note": "ít cay", "prep_minutes": 1, "status": "PENDING", "extended_minutes": 0}]},
+    {"order_id": 2, "table": 5, "pager_id": 1, "waiter": "IPAD1", "created_at": 1792630000000,
+     "items": [{"item_no": 1, "menu_id": "M03", "name": "Phở bò tái", "qty": 1, "note": "", "prep_minutes": 1, "status": "PENDING", "extended_minutes": 0},
+               {"item_no": 2, "menu_id": "M04", "name": "Mực chiên giòn", "qty": 1, "note": "", "prep_minutes": 1, "status": "COOKING", "started_at": 1792630000000, "deadline": 1792630060000, "extended_minutes": 0}]},
+    {"order_id": 3, "table": 9, "pager_id": 2, "waiter": "PHONE1", "created_at": 1792630000000,
+     "items": [{"item_no": 1, "menu_id": "M03", "name": "Phở bò tái", "qty": 2, "note": "", "prep_minutes": 1, "status": "PENDING", "extended_minutes": 0},
+               {"item_no": 2, "menu_id": "M01", "name": "Lẩu thái", "qty": 1, "note": "", "prep_minutes": 2, "status": "PENDING", "extended_minutes": 0}]}
+  ],
+  "handled_requests": {"IPAD1-S1": 1, "IPAD1-S2": 2, "PHONE1-S3": 3}
+}

@@ -4,138 +4,308 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gọi món</title>
-<!-- Đã có: gọi món, tự cập nhật thực đơn, heartbeat. TODO (Cường, F02): làm đẹp giao diện, hiện trạng thái đơn đã gửi. -->
+<!--
+  Trang gọi món (F02, phía trang của F03, F11).
+  Mở: http://<IP máy chủ>:8081/order?device=IPAD1   (device = tên thiết bị, mặc định IPAD1)
+  - Thực đơn tự cập nhật qua SSE (MENU_UPDATE); món tạm hết bị làm mờ.
+  - Gửi đơn: POST /api/order kèm req_id; quá 5 giây không có phản hồi thì cho "Gửi lại" với CÙNG req_id
+    để máy chủ không tạo đơn trùng.
+  - Danh sách "Đơn đã gửi" cập nhật theo ORDER_NEW, ITEM_UPDATE; nối lại sự kiện thì tải lại /api/snapshot.
+-->
 <style>
-  body { font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 16px; background: #f6f6f4; color: #222; }
-  h1 { font-size: 22px; margin: 0 0 12px; }
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background: #f6f6f4; color: #222; }
+  header { position: sticky; top: 0; z-index: 2; background: #c0392b; color: #fff; padding: 10px 16px;
+           display: flex; justify-content: space-between; align-items: center; }
+  header h1 { font-size: 20px; margin: 0; }
+  #conn { font-size: 14px; padding: 4px 10px; border-radius: 12px; background: rgba(255,255,255,.2); }
+  #conn.off { background: #ffd54f; color: #222; font-weight: 600; }
+  main { display: grid; grid-template-columns: 1fr 360px; gap: 16px; padding: 16px; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
   .row { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
   label { font-size: 14px; display: flex; flex-direction: column; gap: 4px; }
   input { font-size: 16px; padding: 8px; border: 1px solid #bbb; border-radius: 8px; }
   input[type=number] { width: 80px; }
   .item { background: #fff; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
   .item.soldout { opacity: .4; }
+  .item.chosen { outline: 2px solid #c0392b; }
   .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   .qty { display: flex; align-items: center; gap: 8px; }
-  .qty button { width: 38px; height: 38px; font-size: 20px; border-radius: 50%; border: none; background: #e5e5e5; }
+  .qty span { min-width: 22px; text-align: center; font-size: 18px; font-weight: 600; }
+  .qty button { width: 42px; height: 42px; font-size: 22px; border-radius: 50%; border: none; background: #e5e5e5; }
   .note { width: 100%; box-sizing: border-box; margin-top: 8px; display: none; }
   .price { color: #777; font-size: 14px; }
+  .side { position: sticky; top: 64px; align-self: start; }
+  .card { background: #fff; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+  .card h2 { font-size: 16px; margin: 0 0 8px; }
+  #draft div { display: flex; justify-content: space-between; padding: 3px 0; }
+  #total { border-top: 1px solid #eee; margin-top: 6px; padding-top: 6px; font-weight: 600; }
   #send { width: 100%; padding: 14px; font-size: 18px; border: none; border-radius: 10px; background: #c0392b; color: #fff; }
   #send:disabled { background: #aaa; }
-  #result { margin-top: 12px; font-weight: 600; }
+  #send.retry { background: #e67e22; }
+  #result { margin-top: 10px; font-weight: 600; min-height: 1.2em; }
+  #result.err { color: #b03a2e; } #result.ok { color: #1e8449; }
+  .order { border-top: 1px solid #eee; padding: 8px 0; }
+  .order b { font-size: 15px; }
+  .line { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; padding: 2px 0; }
+  .st { border-radius: 10px; padding: 1px 8px; font-size: 12px; white-space: nowrap; }
+  .PENDING { background: #eee; } .COOKING { background: #d6e9fb; } .READY { background: #ffe9a8; }
+  .SERVED { background: #d4efdc; } .CANCELLED { background: #f5d0cb; }
+  .empty { color: #888; font-size: 14px; }
 </style>
 </head>
 <body>
-<h1>Gọi món</h1>
-<div class="row">
-  <label>Tên thiết bị <input id="device" value="IPAD1"></label>
-  <label>Bàn <input id="table" type="number" min="1"></label>
-  <label>Thiết bị rung <input id="pager" type="number" min="1" value="1"></label>
-</div>
-<div id="menu">Đang tải thực đơn...</div>
-<button id="send">Gửi bếp</button>
-<div id="result"></div>
+<header><h1>Gọi món - <span id="devLabel"></span></h1><span id="conn">Đang kết nối...</span></header>
+<main>
+  <section>
+    <div class="row">
+      <label>Tên thiết bị <input id="device"></label>
+      <label>Bàn <input id="table" type="number" min="1" inputmode="numeric"></label>
+      <label>Thiết bị rung <input id="pager" type="number" min="1" value="1" inputmode="numeric"></label>
+    </div>
+    <div id="menu">Đang tải thực đơn...</div>
+  </section>
+  <section class="side">
+    <div class="card">
+      <h2>Đơn đang lập</h2>
+      <div id="draft"><span class="empty">Chưa chọn món</span></div>
+      <button id="send">Gửi bếp</button>
+      <div id="result"></div>
+    </div>
+    <div class="card">
+      <h2>Đơn đã gửi</h2>
+      <div id="sent"><span class="empty">Chưa có đơn</span></div>
+    </div>
+  </section>
+</main>
 
 <script>
-const qty = {};
-let counter = 0;
+const $ = id => document.getElementById(id);
+const LABEL = { PENDING: 'Chờ nhận làm', COOKING: 'Đang làm', READY: 'Chờ lấy', SERVED: 'Đã lấy', CANCELLED: 'Đã hủy' };
+const SEND_TIMEOUT_MS = 5000;
 
-function fmt(n) { return n.toLocaleString('vi-VN') + 'đ'; }
+let menu = [];            // [{menu_id, name, price, prep_minutes, sold_out}]
+const qty = {};           // menu_id -> số lượng đang chọn
+const notes = {};         // menu_id -> ghi chú
+let pending = null;       // NEW_ORDER đang chờ ORDER_ACK; giữ nguyên để "Gửi lại" cùng req_id
+const sent = new Map();   // order_id -> đơn của thiết bị này
+let clockOffset = 0;      // giờ máy chủ - giờ máy này (ms), để đếm ngược đúng
+let events = null;
 
+// ---------- tiện ích ----------
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function fmt(n) { return Number(n || 0).toLocaleString('vi-VN') + 'đ'; }
+function mmss(ms) { const s = Math.max(0, Math.floor(ms / 1000)); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); }
+function show(text, kind) { $('result').textContent = text; $('result').className = kind || ''; }
+function setConn(ok) { $('conn').textContent = ok ? 'Đã kết nối' : 'Mất kết nối máy chủ'; $('conn').className = ok ? '' : 'off'; }
+function syncClock(serverTime) { if (serverTime) clockOffset = serverTime - Date.now(); }
+function store(key, value) { try { localStorage.setItem(key, value); } catch (e) { /* trình duyệt chặn bộ nhớ: bỏ qua */ } }
+function load(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+
+function deviceName() { return ($('device').value.trim() || 'WEB').toUpperCase(); }
+$('device').value = new URLSearchParams(location.search).get('device') || load('kos_device') || 'IPAD1';
+$('devLabel').textContent = deviceName();
+$('device').onchange = () => {
+  store('kos_device', deviceName());
+  $('devLabel').textContent = deviceName();
+  sent.clear(); renderSent();
+  connectEvents();           // đăng ký lại với tên mới
+};
+
+/** Đơn đang chờ gửi lại thì khóa sửa, để lần gửi lại đúng y nội dung lần đầu. */
+function locked() {
+  if (pending) show('Đơn đang chờ gửi lại: bấm "Gửi lại" trước khi sửa', 'err');
+  return !!pending;
+}
+
+// ---------- thực đơn (F02) ----------
 async function loadMenu() {
   const res = await fetch('/api/menu');
   const data = await res.json();
+  syncClock(data.server_time);
   renderMenu(data.menu);
 }
 
 // Vẽ thực đơn; giữ nguyên số lượng và ghi chú đang chọn khi thực đơn được cập nhật.
-function renderMenu(menu) {
-  const notes = {};
-  document.querySelectorAll('.note').forEach(n => notes[n.dataset.id] = n.value);
-  const box = document.getElementById('menu');
+function renderMenu(list) {
+  menu = list || [];
+  const box = $('menu');
   box.innerHTML = '';
   for (const m of menu) {
-    if (m.sold_out || qty[m.menu_id] === undefined) qty[m.menu_id] = 0;
+    if (qty[m.menu_id] === undefined) qty[m.menu_id] = 0;
     const div = document.createElement('div');
-    div.className = 'item' + (m.sold_out ? ' soldout' : '');
+    div.className = 'item' + (m.sold_out ? ' soldout' : '') + (qty[m.menu_id] > 0 ? ' chosen' : '');
     div.innerHTML =
-      '<div class="top"><div><div>' + m.name + (m.sold_out ? ' (tạm hết)' : '') + '</div><div class="price">' +
-      fmt(m.price) + ' · ' + m.prep_minutes + ' phút</div></div>' +
-      '<div class="qty"><button data-d="-1">−</button><span>' + qty[m.menu_id] +
-      '</span><button data-d="1">+</button></div></div>' +
+      '<div class="top"><div><div>' + esc(m.name) + (m.sold_out ? ' <b>(tạm hết)</b>' : '') + '</div><div class="price">' +
+      fmt(m.price) + ' · ' + esc(m.prep_minutes) + ' phút</div></div>' +
+      '<div class="qty"><button data-d="-1" aria-label="Bớt">−</button><span>' + qty[m.menu_id] +
+      '</span><button data-d="1" aria-label="Thêm">+</button></div></div>' +
       '<input class="note" maxlength="100" placeholder="Ghi chú (ít cay, không hành...)">';
-    const span = div.querySelector('span');
     const note = div.querySelector('.note');
-    note.dataset.id = m.menu_id;
     note.value = notes[m.menu_id] || '';
     note.style.display = qty[m.menu_id] > 0 ? 'block' : 'none';
+    note.oninput = () => { notes[m.menu_id] = note.value; };
     div.querySelectorAll('button').forEach(b => b.onclick = () => {
-      if (m.sold_out) return;
-      qty[m.menu_id] = Math.max(0, qty[m.menu_id] + Number(b.dataset.d));
-      span.textContent = qty[m.menu_id];
-      note.style.display = qty[m.menu_id] > 0 ? 'block' : 'none';
+      if (locked()) return;
+      const d = Number(b.dataset.d);
+      if (m.sold_out && d > 0) return;          // món tạm hết: chỉ cho bớt, không cho thêm
+      qty[m.menu_id] = Math.max(0, qty[m.menu_id] + d);
+      renderMenu(menu);
     });
     box.appendChild(div);
   }
   // món đã bị xóa khỏi thực đơn thì bỏ khỏi đơn nháp
-  for (const id in qty) if (!menu.some(m => m.menu_id === id)) delete qty[id];
+  for (const id in qty) if (!menu.some(m => m.menu_id === id)) { delete qty[id]; delete notes[id]; }
+  renderDraft();
 }
 
-document.getElementById('send').onclick = async () => {
-  const result = document.getElementById('result');
-  const items = [];
-  for (const id in qty) {
-    if (qty[id] > 0) {
-      const note = document.querySelector('.note[data-id="' + id + '"]').value;
-      items.push({ menu_id: id, qty: qty[id], note: note });
-    }
+function chosen() {
+  return menu.filter(m => qty[m.menu_id] > 0).map(m => ({ m, qty: qty[m.menu_id], note: (notes[m.menu_id] || '').trim() }));
+}
+
+function renderDraft() {
+  const lines = chosen();
+  if (lines.length === 0) { $('draft').innerHTML = '<span class="empty">Chưa chọn món</span>'; return; }
+  let total = 0;
+  $('draft').innerHTML = lines.map(l => {
+    total += l.qty * l.m.price;
+    return '<div><span>' + esc(l.m.name) + ' x' + l.qty + (l.m.sold_out ? ' <b style="color:#b03a2e">(tạm hết)</b>' : '') +
+      '</span><span>' + fmt(l.qty * l.m.price) + '</span></div>';
+  }).join('') + '<div id="total"><span>Tổng</span><span>' + fmt(total) + '</span></div>';
+}
+
+/** Kiểm tra trước khi gửi (các trường hợp lỗi của F02). */
+function validate() {
+  const table = Number($('table').value);
+  if (!Number.isInteger(table) || table < 1) return 'Chưa chọn bàn';
+  const pager = Number($('pager').value);
+  if (!Number.isInteger(pager) || pager < 1) return 'Chưa chọn thiết bị rung';
+  const lines = chosen();
+  if (lines.length === 0) return 'Đơn chưa có món';
+  for (const l of lines) if (l.m.sold_out) return l.m.name + ' vừa tạm hết, hãy bớt món này khỏi đơn';
+  return null;
+}
+
+// ---------- gửi đơn (F03 phía trang) ----------
+$('send').onclick = async () => {
+  if (!pending) {
+    const err = validate();
+    if (err) { show(err, 'err'); return; }
+    const device = deviceName();
+    pending = {
+      command: 'NEW_ORDER',
+      req_id: device + '-' + Date.now(),
+      name: device,
+      table: Number($('table').value),
+      pager_id: Number($('pager').value),
+      items: chosen().map(l => ({ menu_id: l.m.menu_id, qty: l.qty, note: l.note }))
+    };
   }
-  const table = Number(document.getElementById('table').value);
-  if (!table) { result.textContent = 'Chưa chọn bàn'; return; }
-  if (items.length === 0) { result.textContent = 'Đơn chưa có món'; return; }
-  const device = document.getElementById('device').value.trim() || 'WEB';
-  const msg = {
-    command: 'NEW_ORDER',
-    req_id: device + '-' + Date.now() + '-' + (++counter),
-    name: device,
-    table: table,
-    pager_id: Number(document.getElementById('pager').value),
-    items: items
-  };
-  const btn = document.getElementById('send');
+  const btn = $('send');
   btn.disabled = true;
+  show('Đang gửi...');
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), SEND_TIMEOUT_MS);
   try {
-    const res = await fetch('/api/order', { method: 'POST', body: JSON.stringify(msg) });
+    const res = await fetch('/api/order', { method: 'POST', body: JSON.stringify(pending), signal: ctrl.signal,
+                                             headers: { 'Content-Type': 'application/json; charset=utf-8' } });
     const data = await res.json();
-    if (data.command === 'ORDER_ACK') {
-      result.textContent = 'Đã gửi - đơn số ' + data.order_id + (data.kitchen_online ? '' : ' (bếp chưa kết nối!)');
+    if (data.command === 'ORDER_ACK' && data.req_id === pending.req_id) {
+      show('Đã gửi - đơn số ' + data.order_id + (data.kitchen_online ? '' : ' (CHÚ Ý: bếp chưa kết nối!)'),
+           data.kitchen_online ? 'ok' : 'err');
+      pending = null;
       for (const id in qty) qty[id] = 0;
-      document.querySelectorAll('.note').forEach(n => n.value = '');
-      loadMenu();
+      for (const id in notes) delete notes[id];
+      renderMenu(menu);
+      loadSnapshot().catch(() => {});        // phòng khi ORDER_NEW đến trước lúc SSE sẵn sàng
     } else {
-      result.textContent = 'Lỗi: ' + data.message;
+      // Máy chủ từ chối (dữ liệu sai, món vừa tạm hết...): giữ đơn nháp để sửa, lần sau gửi với req_id mới.
+      show('Bị từ chối: ' + (data.message || 'lỗi không rõ'), 'err');
+      pending = null;
     }
   } catch (e) {
-    result.textContent = 'Chưa gửi được, kiểm tra Wi-Fi rồi bấm lại';
+    show('Chưa gửi được. Kiểm tra Wi-Fi rồi bấm "Gửi lại".', 'err');
+  } finally {
+    clearTimeout(timer);
+    btn.disabled = false;
+    btn.textContent = pending ? 'Gửi lại' : 'Gửi bếp';
+    btn.className = pending ? 'retry' : '';
   }
-  btn.disabled = false;
 };
 
-loadMenu().catch(() => document.getElementById('menu').textContent = 'Không tải được thực đơn');
+// ---------- đơn đã gửi ----------
+function isMine(o) { return (o.waiter || '').toUpperCase() === deviceName(); }
+function isDone(o) { return o.items.every(i => i.status === 'SERVED' || i.status === 'CANCELLED'); }
 
-// ---------- kết nối sự kiện và heartbeat (F11) ----------
-function deviceName() { return document.getElementById('device').value.trim() || 'WEB'; }
+function renderSent() {
+  const box = $('sent');
+  const list = [...sent.values()].sort((a, b) => b.order_id - a.order_id);
+  if (list.length === 0) { box.innerHTML = '<span class="empty">Chưa có đơn</span>'; return; }
+  const now = Date.now() + clockOffset;
+  box.innerHTML = list.map(o =>
+    '<div class="order"><b>Đơn ' + o.order_id + ' - bàn ' + esc(o.table) + '</b>' +
+    o.items.map(i => {
+      let st = LABEL[i.status] || i.status;
+      if (i.status === 'COOKING' && i.deadline) st += ' · còn ' + mmss(i.deadline - now);
+      if (i.status === 'CANCELLED' && i.reason) st += ' (' + esc(i.reason) + ')';
+      return '<div class="line"><span>' + esc(i.name) + ' x' + i.qty + '</span><span class="st ' + i.status + '">' + st + '</span></div>';
+    }).join('') + '</div>').join('');
+}
 
-const events = new EventSource('/api/events?name=' + encodeURIComponent(deviceName()));
-events.addEventListener('MENU_UPDATE', e => {
-  renderMenu(JSON.parse(e.data).menu);
-  document.getElementById('result').textContent = 'Thực đơn vừa được cập nhật';
-});
-// TODO (Cường): dùng ORDER_NEW và ITEM_UPDATE để hiện trạng thái các đơn đã gửi.
+async function loadSnapshot() {
+  const data = await (await fetch('/api/snapshot')).json();
+  syncClock(data.server_time);
+  sent.clear();
+  for (const o of data.orders || []) if (isMine(o)) sent.set(o.order_id, o);
+  renderSent();
+}
+
+// Đơn hoàn tất vẫn hiện thêm 30 giây rồi mới ẩn, để phục vụ kịp thấy "Đã lấy".
+function removeLater(orderId) {
+  setTimeout(() => { const o = sent.get(orderId); if (o && isDone(o)) { sent.delete(orderId); renderSent(); } }, 30000);
+}
+
+// ---------- kết nối sự kiện (SSE) và heartbeat (F11) ----------
+function connectEvents() {
+  if (events) events.close();
+  events = new EventSource('/api/events?name=' + encodeURIComponent(deviceName()));
+  // Mỗi lần (nối lại) thành công: tải lại thực đơn và đơn, vì sự kiện phát lúc mất kết nối đã bị lỡ.
+  events.onopen = () => { setConn(true); loadMenu().catch(() => {}); loadSnapshot().catch(() => {}); };
+  events.onerror = () => setConn(false);    // EventSource tự kết nối lại sau vài giây
+  events.addEventListener('MENU_UPDATE', e => {
+    const m = JSON.parse(e.data);
+    syncClock(m.server_time);
+    renderMenu(m.menu);
+    if (!pending) show('Thực đơn vừa được cập nhật', 'ok');
+  });
+  events.addEventListener('ORDER_NEW', e => {
+    const o = JSON.parse(e.data).order;
+    if (o && isMine(o)) { sent.set(o.order_id, o); renderSent(); }
+  });
+  events.addEventListener('ITEM_UPDATE', e => {
+    const u = JSON.parse(e.data);
+    syncClock(u.server_time);
+    const o = sent.get(u.order_id);
+    if (!o) return;
+    const it = o.items.find(i => i.item_no === u.item_no);
+    if (it) {
+      for (const k of ['status', 'started_at', 'deadline', 'extended_minutes', 'reason']) if (u[k] !== undefined) it[k] = u[k];
+    }
+    if (isDone(o)) removeLater(o.order_id);
+    renderSent();
+  });
+}
 
 setInterval(() => {
   fetch('/api/heartbeat', { method: 'POST', body: JSON.stringify({ command: 'PING', name: deviceName() }) })
-    .catch(() => {});
+    .then(r => r.json()).then(d => syncClock(d.server_time))
+    .catch(() => setConn(false));
 }, 5000);
+setInterval(() => { if (sent.size) renderSent(); }, 1000);   // đồng hồ đếm ngược
+
+loadMenu().catch(() => { $('menu').textContent = 'Không tải được thực đơn - kiểm tra địa chỉ máy chủ'; });
+connectEvents();
 </script>
 </body>
 </html>
