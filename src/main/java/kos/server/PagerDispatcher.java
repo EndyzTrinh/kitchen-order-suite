@@ -166,7 +166,7 @@ public class PagerDispatcher {
 
     /**
      * Quản lý xác nhận thủ công tại quầy khi không có thiết bị rung nào phản hồi.
-     * TODO (Cường): nút "Đã lấy món" trên thẻ Đơn hàng gọi hàm này với call_id hiện trên bảng lệnh rung.
+     * Dùng bởi nút "Xác nhận đã lấy món" trên thẻ Đơn hàng của ManagerWindow.
      */
     public boolean confirmManually(String callId) {
         Call call = close(callId);

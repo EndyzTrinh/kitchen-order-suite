@@ -8,7 +8,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Danh sách các màn hình bếp đang kết nối TCP và việc phát tin tới chúng.
- * TODO (Nam): thêm thiết bị web (trang gọi món, thiết bị rung) vào bảng thiết bị (F11).
+ * Thiết bị web (trang gọi món, thiết bị rung) nằm ở DeviceRegistry.
  */
 public class ClientRegistry {
 

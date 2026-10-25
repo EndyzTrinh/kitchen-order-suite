@@ -25,6 +25,7 @@ import java.util.concurrent.Executors;
  * GET  /api/snapshot               SNAPSHOT các đơn chưa hoàn tất
  * GET  /api/events?name=X          SSE cho trang gọi món (ORDER_NEW, ITEM_UPDATE, MENU_UPDATE)
  * POST /api/order                  NEW_ORDER -> ORDER_ACK / ERROR
+ * POST /api/priority               PRIORITY_ITEMS: xin ưu tiên món đang chờ làm (F14)
  * POST /api/heartbeat              heartbeat của trang gọi món
  * GET  /api/pager/events?id=N      SSE cho thiết bị rung (PAGER_CALL, PAGER_CLOSE)
  * POST /api/pager/received         PAGER_RECEIVED
@@ -50,6 +51,7 @@ public class WebGateway {
         server.createContext("/api/snapshot", this::handleSnapshot);
         server.createContext("/api/events", this::handleOrderEvents);
         server.createContext("/api/order", this::handleOrder);
+        server.createContext("/api/priority", this::handlePriority);
         server.createContext("/api/heartbeat", ex -> handleHeartbeat(ex, false));
         server.createContext("/api/pager/events", this::handlePagerEvents);
         server.createContext("/api/pager/received", ex -> handlePagerReply(ex, false));
@@ -154,8 +156,43 @@ public class WebGateway {
                 Message news = new Message(Protocol.ORDER_NEW);
                 news.order = r.order();
                 ctx.broadcast(news);
+                boolean hasPriority = false;
+                for (kos.common.OrderItem it : r.order().items) {
+                    if (it.isPriority()) {
+                        hasPriority = true;
+                        ctx.log(name + " xin ưu tiên lúc gọi món: " + it.name + " x" + it.qty
+                                + " (bàn " + r.order().table + ", đơn " + r.order().orderId + ")");
+                    }
+                }
+                if (hasPriority) {
+                    ctx.kitchen().checkPriorityQueue();
+                }
                 ctx.save();
             }
+        }
+    }
+
+    /** POST /api/priority - phục vụ xin ưu tiên các món đang chờ làm. */
+    private void handlePriority(HttpExchange ex) throws IOException {
+        try (ex) {
+            Message req = readMessage(ex);
+            if (req == null) {
+                return;
+            }
+            if (!Protocol.PRIORITY_ITEMS.equals(req.command)) {
+                sendJson(ex, Message.error(req.reqId, "Đường dẫn này chỉ nhận PRIORITY_ITEMS"));
+                return;
+            }
+            String name = req.name == null || req.name.isBlank() ? "WEB" : req.name;
+            ctx.devices().touch(DeviceRegistry.TYPE_ORDER, name, remoteIp(ex));
+            Message err = ctx.kitchen().priority(req, name);
+            if (err != null) {
+                sendJson(ex, err);
+                return;
+            }
+            Message ok = new Message(Protocol.PRIORITY_ITEMS);
+            ok.reqId = req.reqId;
+            sendJson(ex, ok);
         }
     }
 

@@ -35,6 +35,13 @@ public final class Protocol {
     // ---- Giới hạn ----
     /** Tổng số phút gia hạn tối đa cho một món. */
     public static final int MAX_EXTEND_MINUTES = 30;
+    /** Số món ưu tiên tối đa đang chờ làm của một bàn (F14). */
+    public static final int MAX_PRIORITY_PER_TABLE = 2;
+    /** Hàng đợi ưu tiên dài từ mức này thì cảnh báo (dấu hiệu lạm dụng). */
+    public static final int PRIORITY_ALERT_COUNT = 6;
+    /** Món chờ nhận làm quá lâu: tô vàng, rồi tô đỏ trên màn hình bếp. */
+    public static final int PENDING_WARN_MS = 3 * 60_000;
+    public static final int PENDING_LATE_MS = 6 * 60_000;
     /** Độ dài tối đa của ghi chú món. */
     public static final int MAX_NOTE_LENGTH = 100;
 
@@ -50,6 +57,9 @@ public final class Protocol {
     public static final String EXTEND_ITEMS = "EXTEND_ITEMS";
     public static final String FINISH_ITEMS = "FINISH_ITEMS";
     public static final String SOLD_OUT = "SOLD_OUT";
+
+    // ---- Lệnh: trang gọi món / quầy -> máy chủ: xin ưu tiên (F14) ----
+    public static final String PRIORITY_ITEMS = "PRIORITY_ITEMS";
     public static final String PING = "PING";
     public static final String PONG = "PONG";
 

@@ -2,140 +2,367 @@
 <html lang="vi">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Gọi món</title>
-<!-- Đã có: gọi món, tự cập nhật thực đơn, heartbeat. TODO (Cường, F02): làm đẹp giao diện, hiện trạng thái đơn đã gửi. -->
+<!--
+  Trang gọi món cho iPad / điện thoại của phục vụ (F02, F03, F14).
+  - Thẻ "Gọi món": chọn bàn, món, số lượng, ghi chú, đánh dấu Ưu tiên, gửi bếp (POST /api/order).
+  - Thẻ "Đơn đã gửi": trạng thái từng món theo thời gian thực (SSE /api/events), đẩy ưu tiên (POST /api/priority).
+  - Gửi heartbeat mỗi 5 giây (POST /api/heartbeat) để quầy biết thiết bị còn hoạt động.
+-->
 <style>
-  body { font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 16px; background: #f6f6f4; color: #222; }
-  h1 { font-size: 22px; margin: 0 0 12px; }
-  .row { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
-  label { font-size: 14px; display: flex; flex-direction: column; gap: 4px; }
-  input { font-size: 16px; padding: 8px; border: 1px solid #bbb; border-radius: 8px; }
-  input[type=number] { width: 80px; }
-  .item { background: #fff; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
-  .item.soldout { opacity: .4; }
-  .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-  .qty { display: flex; align-items: center; gap: 8px; }
-  .qty button { width: 38px; height: 38px; font-size: 20px; border-radius: 50%; border: none; background: #e5e5e5; }
-  .note { width: 100%; box-sizing: border-box; margin-top: 8px; display: none; }
-  .price { color: #777; font-size: 14px; }
-  #send { width: 100%; padding: 14px; font-size: 18px; border: none; border-radius: 10px; background: #c0392b; color: #fff; }
-  #send:disabled { background: #aaa; }
-  #result { margin-top: 12px; font-weight: 600; }
+  :root { --bg:#f4f3ef; --card:#fff; --ink:#1d1d1f; --muted:#6e6e73; --line:#e3e1db;
+          --red:#c0392b; --orange:#e67e22; --orange-soft:#ffe0b2; --green:#27ae60; --blue:#2e86de; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system, system-ui, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink);
+         -webkit-tap-highlight-color: transparent; }
+  header { position:sticky; top:0; z-index:5; background:#1d1d1f; color:#fff; padding:10px 16px 0; }
+  .hrow { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .hrow label { font-size:12px; color:#bbb; display:flex; flex-direction:column; gap:2px; }
+  .hrow input { width:110px; font-size:16px; padding:6px 8px; border-radius:8px; border:0; }
+  .hrow input.small { width:64px; }
+  #conn { margin-left:auto; font-size:13px; color:#f39c12; }
+  #conn.ok { color:#6fcf73; }
+  .tabs { display:flex; margin-top:10px; }
+  .tabs button { flex:1; background:none; border:0; color:#aaa; font-size:16px; padding:10px; border-bottom:3px solid transparent; }
+  .tabs button.on { color:#fff; border-bottom-color:var(--orange); font-weight:600; }
+  main { padding:14px 16px 120px; max-width:900px; margin:0 auto; }
+  .tablepick { display:flex; align-items:center; gap:10px; margin-bottom:12px; font-size:17px; }
+  .tablepick input { width:90px; font-size:20px; padding:8px; border-radius:10px; border:1px solid #bbb; text-align:center; }
+  .item { background:var(--card); border-radius:12px; padding:10px 12px; margin-bottom:8px; border:2px solid transparent; }
+  .item.soldout { opacity:.4; }
+  .item.prio { border-color:var(--orange); background:#fff8ee; }
+  .top { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .name { font-size:17px; }
+  .price { color:var(--muted); font-size:14px; }
+  .qty { display:flex; align-items:center; gap:8px; }
+  .qty button { width:40px; height:40px; font-size:22px; border-radius:50%; border:0; background:#e9e7e1; }
+  .qty span { min-width:22px; text-align:center; font-size:18px; font-weight:600; }
+  .extra { display:none; gap:8px; margin-top:8px; align-items:center; }
+  .extra input { flex:1; font-size:15px; padding:8px; border-radius:8px; border:1px solid #ccc; }
+  .star { border:2px solid var(--orange); background:#fff; color:var(--orange); border-radius:20px; padding:7px 12px;
+          font-size:14px; font-weight:600; white-space:nowrap; }
+  .star.on { background:var(--orange); color:#fff; }
+  .bar { position:fixed; left:0; right:0; bottom:0; background:#fff; border-top:1px solid var(--line);
+         padding:10px 16px calc(10px + env(safe-area-inset-bottom)); display:flex; gap:12px; align-items:center; z-index:5; }
+  .bar .sum { flex:1; font-size:15px; color:var(--muted); }
+  .bar .sum b { color:var(--ink); font-size:18px; }
+  #send { padding:14px 26px; font-size:18px; border:0; border-radius:12px; background:var(--red); color:#fff; font-weight:600; }
+  #send:disabled { background:#aaa; }
+  .order { background:var(--card); border-radius:12px; padding:12px; margin-bottom:12px; }
+  .order h3 { margin:0 0 6px; font-size:18px; display:flex; justify-content:space-between; }
+  .order h3 small { color:var(--muted); font-weight:400; font-size:13px; }
+  .line { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:8px 0; border-top:1px solid var(--line); }
+  .line .what { font-size:16px; }
+  .line .what small { display:block; color:var(--muted); font-size:13px; }
+  .chip { font-size:13px; padding:4px 9px; border-radius:20px; white-space:nowrap; background:#eee; }
+  .s-PENDING { background:#eee; } .s-COOKING { background:#d6eaf8; } .s-READY { background:#d4efdf; }
+  .s-SERVED { background:#f0f0f0; color:#999; } .s-CANCELLED { background:#fadbd8; color:var(--red); }
+  .badge { background:var(--orange); color:#fff; font-size:12px; padding:3px 8px; border-radius:20px; margin-left:6px; }
+  .push { border:0; background:var(--orange-soft); color:#a04000; border-radius:8px; padding:8px 10px; font-size:14px; font-weight:600; }
+  .filter { display:flex; align-items:center; gap:8px; margin-bottom:10px; color:var(--muted); font-size:14px; }
+  .empty { text-align:center; color:var(--muted); padding:40px 0; }
+  #toast { position:fixed; left:50%; top:110px; transform:translateX(-50%); background:#1d1d1f; color:#fff; padding:12px 18px;
+           border-radius:12px; font-size:15px; max-width:90%; display:none; z-index:10; box-shadow:0 6px 20px rgba(0,0,0,.25); }
+  #toast.err { background:var(--red); }
+  .hidden { display:none !important; }
 </style>
 </head>
 <body>
-<h1>Gọi món</h1>
-<div class="row">
-  <label>Tên thiết bị <input id="device" value="IPAD1"></label>
-  <label>Bàn <input id="table" type="number" min="1"></label>
-  <label>Thiết bị rung <input id="pager" type="number" min="1" value="1"></label>
+<header>
+  <div class="hrow">
+    <label>Tên thiết bị <input id="device"></label>
+    <label>Thiết bị rung <input id="pager" class="small" type="number" min="1" inputmode="numeric"></label>
+    <span id="conn">○ Đang kết nối...</span>
+  </div>
+  <div class="tabs">
+    <button id="tabOrder" class="on">Gọi món</button>
+    <button id="tabSent">Đơn đã gửi</button>
+  </div>
+</header>
+
+<main>
+  <section id="viewOrder">
+    <div class="tablepick">Bàn số <input id="table" type="number" min="1" inputmode="numeric"></div>
+    <div id="menu">Đang tải thực đơn...</div>
+  </section>
+  <section id="viewSent" class="hidden">
+    <label class="filter"><input type="checkbox" id="showAll"> Hiện đơn của mọi thiết bị</label>
+    <div id="sent"></div>
+  </section>
+</main>
+
+<div class="bar" id="bar">
+  <div class="sum" id="sum">Chưa chọn món</div>
+  <button id="send">Gửi bếp</button>
 </div>
-<div id="menu">Đang tải thực đơn...</div>
-<button id="send">Gửi bếp</button>
-<div id="result"></div>
+<div id="toast"></div>
 
 <script>
-const qty = {};
+// ---------------- trạng thái ----------------
+const MAX_PRIORITY = 2;              // khớp Protocol.MAX_PRIORITY_PER_TABLE
+let menu = [];
+const draft = {};                    // menu_id -> { qty, note, priority }
+const orders = {};                   // order_id -> đơn (cập nhật bằng sự kiện)
+let clockOffset = 0;                 // giờ máy chủ - giờ máy này
 let counter = 0;
 
-function fmt(n) { return n.toLocaleString('vi-VN') + 'đ'; }
+function store(key, value) { try { localStorage.setItem(key, value); } catch (e) {} }
+function load(key, def) { try { return localStorage.getItem(key) || def; } catch (e) { return def; } }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmt(n) { return Number(n || 0).toLocaleString('vi-VN') + 'đ'; }
+function now() { return Date.now() + clockOffset; }
+function mmss(ms) { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+function deviceName() { return document.getElementById('device').value.trim() || 'WEB'; }
 
-async function loadMenu() {
-  const res = await fetch('/api/menu');
-  const data = await res.json();
-  renderMenu(data.menu);
+const $device = document.getElementById('device');
+const $pager = document.getElementById('pager');
+$device.value = load('kos.device', 'IPAD1');
+$pager.value = load('kos.pager', '1');
+$device.onchange = () => { store('kos.device', $device.value.trim()); renderSent(); };
+$pager.onchange = () => store('kos.pager', $pager.value);
+
+function toast(text, isError) {
+  const t = document.getElementById('toast');
+  t.textContent = text;
+  t.className = isError ? 'err' : '';
+  t.style.display = 'block';
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.style.display = 'none', isError ? 5000 : 2500);
 }
 
-// Vẽ thực đơn; giữ nguyên số lượng và ghi chú đang chọn khi thực đơn được cập nhật.
-function renderMenu(menu) {
-  const notes = {};
-  document.querySelectorAll('.note').forEach(n => notes[n.dataset.id] = n.value);
+// ---------------- thẻ ----------------
+function showTab(sent) {
+  document.getElementById('tabOrder').classList.toggle('on', !sent);
+  document.getElementById('tabSent').classList.toggle('on', sent);
+  document.getElementById('viewOrder').classList.toggle('hidden', sent);
+  document.getElementById('viewSent').classList.toggle('hidden', !sent);
+  document.getElementById('bar').classList.toggle('hidden', sent);
+  if (sent) renderSent();
+}
+document.getElementById('tabOrder').onclick = () => showTab(false);
+document.getElementById('tabSent').onclick = () => showTab(true);
+document.getElementById('showAll').onchange = renderSent;
+
+// ---------------- gọi món ----------------
+function renderMenu() {
   const box = document.getElementById('menu');
   box.innerHTML = '';
   for (const m of menu) {
-    if (m.sold_out || qty[m.menu_id] === undefined) qty[m.menu_id] = 0;
+    const d = draft[m.menu_id] || (draft[m.menu_id] = { qty: 0, note: '', priority: false });
+    if (m.sold_out) { d.qty = 0; d.priority = false; }
     const div = document.createElement('div');
-    div.className = 'item' + (m.sold_out ? ' soldout' : '');
+    div.className = 'item' + (m.sold_out ? ' soldout' : '') + (d.priority && d.qty > 0 ? ' prio' : '');
     div.innerHTML =
-      '<div class="top"><div><div>' + m.name + (m.sold_out ? ' (tạm hết)' : '') + '</div><div class="price">' +
-      fmt(m.price) + ' · ' + m.prep_minutes + ' phút</div></div>' +
-      '<div class="qty"><button data-d="-1">−</button><span>' + qty[m.menu_id] +
-      '</span><button data-d="1">+</button></div></div>' +
-      '<input class="note" maxlength="100" placeholder="Ghi chú (ít cay, không hành...)">';
-    const span = div.querySelector('span');
-    const note = div.querySelector('.note');
-    note.dataset.id = m.menu_id;
-    note.value = notes[m.menu_id] || '';
-    note.style.display = qty[m.menu_id] > 0 ? 'block' : 'none';
-    div.querySelectorAll('button').forEach(b => b.onclick = () => {
+      '<div class="top"><div><div class="name">' + esc(m.name) + (m.sold_out ? ' (tạm hết)' : '') + '</div>' +
+      '<div class="price">' + fmt(m.price) + ' · ' + esc(m.prep_minutes) + ' phút</div></div>' +
+      '<div class="qty"><button data-d="-1">−</button><span>' + d.qty + '</span><button data-d="1">+</button></div></div>' +
+      '<div class="extra"><input maxlength="100" placeholder="Ghi chú (ít cay, không hành...)">' +
+      '<button class="star">★ Ưu tiên</button></div>';
+    const extra = div.querySelector('.extra');
+    const note = extra.querySelector('input');
+    const star = extra.querySelector('.star');
+    note.value = d.note;
+    note.oninput = () => d.note = note.value;
+    const sync = () => {
+      div.querySelector('.qty span').textContent = d.qty;
+      extra.style.display = d.qty > 0 ? 'flex' : 'none';
+      star.classList.toggle('on', d.priority);
+      div.classList.toggle('prio', d.priority && d.qty > 0);
+      updateSum();
+    };
+    div.querySelectorAll('.qty button').forEach(b => b.onclick = () => {
       if (m.sold_out) return;
-      qty[m.menu_id] = Math.max(0, qty[m.menu_id] + Number(b.dataset.d));
-      span.textContent = qty[m.menu_id];
-      note.style.display = qty[m.menu_id] > 0 ? 'block' : 'none';
+      d.qty = Math.max(0, d.qty + Number(b.dataset.d));
+      if (d.qty === 0) d.priority = false;
+      sync();
     });
+    star.onclick = () => {
+      if (!d.priority && countDraftPriority() >= MAX_PRIORITY) {
+        toast('Mỗi bàn chỉ ưu tiên tối đa ' + MAX_PRIORITY + ' món', true);
+        return;
+      }
+      d.priority = !d.priority;
+      sync();
+    };
+    sync();
     box.appendChild(div);
   }
-  // món đã bị xóa khỏi thực đơn thì bỏ khỏi đơn nháp
-  for (const id in qty) if (!menu.some(m => m.menu_id === id)) delete qty[id];
+  for (const id in draft) if (!menu.some(m => m.menu_id === id)) delete draft[id];
+  updateSum();
+}
+
+function countDraftPriority() {
+  return Object.values(draft).filter(d => d.qty > 0 && d.priority).length;
+}
+
+function updateSum() {
+  let n = 0, total = 0;
+  for (const m of menu) { const d = draft[m.menu_id]; if (d && d.qty > 0) { n += d.qty; total += d.qty * m.price; } }
+  const p = countDraftPriority();
+  document.getElementById('sum').innerHTML = n === 0 ? 'Chưa chọn món'
+    : '<b>' + n + ' phần · ' + fmt(total) + '</b>' + (p ? '<br>★ ' + p + ' món ưu tiên' : '');
 }
 
 document.getElementById('send').onclick = async () => {
-  const result = document.getElementById('result');
-  const items = [];
-  for (const id in qty) {
-    if (qty[id] > 0) {
-      const note = document.querySelector('.note[data-id="' + id + '"]').value;
-      items.push({ menu_id: id, qty: qty[id], note: note });
-    }
-  }
   const table = Number(document.getElementById('table').value);
-  if (!table) { result.textContent = 'Chưa chọn bàn'; return; }
-  if (items.length === 0) { result.textContent = 'Đơn chưa có món'; return; }
-  const device = document.getElementById('device').value.trim() || 'WEB';
-  const msg = {
-    command: 'NEW_ORDER',
-    req_id: device + '-' + Date.now() + '-' + (++counter),
-    name: device,
-    table: table,
-    pager_id: Number(document.getElementById('pager').value),
-    items: items
-  };
+  const items = [];
+  for (const m of menu) {
+    const d = draft[m.menu_id];
+    if (d && d.qty > 0) items.push({ menu_id: m.menu_id, qty: d.qty, note: d.note.trim(), priority: d.priority || undefined });
+  }
+  if (!table) { toast('Chưa nhập số bàn', true); return; }
+  if (items.length === 0) { toast('Đơn chưa có món', true); return; }
+  const pager = Number($pager.value);
+  if (!pager) { toast('Chưa nhập số thiết bị rung', true); return; }
   const btn = document.getElementById('send');
   btn.disabled = true;
+  const msg = { command: 'NEW_ORDER', req_id: deviceName() + '-' + Date.now() + '-' + (++counter),
+                name: deviceName(), table: table, pager_id: pager, items: items };
   try {
-    const res = await fetch('/api/order', { method: 'POST', body: JSON.stringify(msg) });
-    const data = await res.json();
+    const data = await post('/api/order', msg);
     if (data.command === 'ORDER_ACK') {
-      result.textContent = 'Đã gửi - đơn số ' + data.order_id + (data.kitchen_online ? '' : ' (bếp chưa kết nối!)');
-      for (const id in qty) qty[id] = 0;
-      document.querySelectorAll('.note').forEach(n => n.value = '');
-      loadMenu();
+      toast('Đã gửi bàn ' + table + ' - đơn số ' + data.order_id + (data.kitchen_online ? '' : ' (bếp chưa kết nối!)'),
+            !data.kitchen_online);
+      for (const id in draft) draft[id] = { qty: 0, note: '', priority: false };
+      document.getElementById('table').value = '';
+      renderMenu();
     } else {
-      result.textContent = 'Lỗi: ' + data.message;
+      toast(data.message, true);
     }
   } catch (e) {
-    result.textContent = 'Chưa gửi được, kiểm tra Wi-Fi rồi bấm lại';
+    toast('Chưa gửi được, kiểm tra Wi-Fi rồi bấm lại', true);
   }
   btn.disabled = false;
 };
 
-loadMenu().catch(() => document.getElementById('menu').textContent = 'Không tải được thực đơn');
+// ---------------- đơn đã gửi ----------------
+const STATUS = { PENDING: 'Chờ làm', COOKING: 'Đang làm', READY: 'Xong - chờ lấy', SERVED: 'Đã lấy', CANCELLED: 'Đã hủy' };
 
-// ---------- kết nối sự kiện và heartbeat (F11) ----------
-function deviceName() { return document.getElementById('device').value.trim() || 'WEB'; }
+function priorityRanks() {
+  const q = [];
+  for (const o of Object.values(orders))
+    for (const it of o.items) if (it.status === 'PENDING' && it.priority) q.push(it);
+  q.sort((a, b) => a.priority_at - b.priority_at);
+  const r = new Map();
+  q.forEach((it, i) => r.set(it, i + 1));
+  return r;
+}
 
-const events = new EventSource('/api/events?name=' + encodeURIComponent(deviceName()));
-events.addEventListener('MENU_UPDATE', e => {
-  renderMenu(JSON.parse(e.data).menu);
-  document.getElementById('result').textContent = 'Thực đơn vừa được cập nhật';
-});
-// TODO (Cường): dùng ORDER_NEW và ITEM_UPDATE để hiện trạng thái các đơn đã gửi.
+function renderSent() {
+  const box = document.getElementById('sent');
+  if (document.getElementById('viewSent').classList.contains('hidden')) return;
+  const all = document.getElementById('showAll').checked;
+  const ranks = priorityRanks();
+  const list = Object.values(orders)
+    .filter(o => all || o.waiter === deviceName())
+    .filter(o => o.items.some(it => it.status !== 'SERVED' && it.status !== 'CANCELLED'))
+    .sort((a, b) => b.order_id - a.order_id);
+  let open = 0;
+  if (list.length === 0) {
+    box.innerHTML = '<div class="empty">Chưa có đơn nào đang làm' + (all ? '' : ' từ thiết bị này') + '.</div>';
+  } else {
+    box.innerHTML = '';
+    for (const o of list) {
+      const div = document.createElement('div');
+      div.className = 'order';
+      const time = new Date(o.created_at - clockOffset).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+      let html = '<h3>Bàn ' + esc(o.table) + '<small>Đơn ' + o.order_id + ' · ' + time + ' · rung ' + esc(o.pager_id) + '</small></h3>';
+      for (const it of o.items) {
+        if (it.status !== 'SERVED' && it.status !== 'CANCELLED') open++;
+        let state = STATUS[it.status] || it.status;
+        if (it.status === 'COOKING' && it.deadline) state += ' · còn ' + mmss(it.deadline - now());
+        if (it.status === 'CANCELLED' && it.reason) state += ': ' + esc(it.reason);
+        const rank = ranks.get(it);
+        html += '<div class="line"><div class="what">' + esc(it.name) + ' x' + esc(it.qty) +
+          (rank ? '<span class="badge">Ưu tiên #' + rank + '</span>' : '') +
+          (it.note ? '<small>' + esc(it.note) + '</small>' : '') + '</div>' +
+          '<div style="display:flex;gap:8px;align-items:center">' +
+          (it.status === 'PENDING' && !it.priority
+            ? '<button class="push" data-o="' + o.order_id + '" data-i="' + it.item_no + '">★ Đẩy ưu tiên</button>' : '') +
+          '<span class="chip s-' + it.status + '">' + state + '</span></div></div>';
+      }
+      div.innerHTML = html;
+      div.querySelectorAll('.push').forEach(b => b.onclick = () => pushPriority(Number(b.dataset.o), Number(b.dataset.i), b));
+      box.appendChild(div);
+    }
+  }
+  document.getElementById('tabSent').textContent = 'Đơn đã gửi' + (open ? ' (' + open + ')' : '');
+}
+
+async function pushPriority(orderId, itemNo, btn) {
+  btn.disabled = true;
+  const msg = { command: 'PRIORITY_ITEMS', req_id: deviceName() + '-P' + Date.now(), name: deviceName(),
+                items: [{ order_id: orderId, item_no: itemNo }] };
+  try {
+    const data = await post('/api/priority', msg);
+    if (data.command === 'ERROR') toast(data.message, true);
+    else toast('Đã báo bếp làm trước');
+  } catch (e) {
+    toast('Chưa gửi được, kiểm tra Wi-Fi', true);
+  }
+  btn.disabled = false;
+}
+
+// ---------------- kết nối máy chủ ----------------
+function post(path, body) {
+  return fetch(path, { method: 'POST', body: JSON.stringify(body) }).then(r => r.json());
+}
+
+function syncClock(serverTime) { if (serverTime) clockOffset = serverTime - Date.now(); }
+
+async function loadAll() {
+  const [m, s] = await Promise.all([fetch('/api/menu').then(r => r.json()), fetch('/api/snapshot').then(r => r.json())]);
+  menu = m.menu || [];
+  syncClock(s.server_time);
+  for (const id in orders) delete orders[id];
+  for (const o of s.orders || []) orders[o.order_id] = o;
+  renderMenu();
+  renderSent();
+}
+
+function connect() {
+  const conn = document.getElementById('conn');
+  const es = new EventSource('/api/events?name=' + encodeURIComponent(deviceName()));
+  es.onopen = () => { conn.textContent = '● Đã kết nối'; conn.className = 'ok'; loadAll().catch(() => {}); };
+  es.onerror = () => { conn.textContent = '○ Mất kết nối - đang thử lại'; conn.className = ''; };
+  es.addEventListener('MENU_UPDATE', e => {
+    const d = JSON.parse(e.data);
+    menu = d.menu || [];
+    renderMenu();
+    toast('Thực đơn vừa được cập nhật');
+  });
+  es.addEventListener('ORDER_NEW', e => {
+    const o = JSON.parse(e.data).order;
+    orders[o.order_id] = o;
+    renderSent();
+  });
+  es.addEventListener('ITEM_UPDATE', e => {
+    const u = JSON.parse(e.data);
+    syncClock(u.server_time);
+    const o = orders[u.order_id];
+    if (!o) return;
+    const it = o.items.find(x => x.item_no === u.item_no);
+    if (!it) return;
+    const wasReady = it.status === 'READY';
+    Object.assign(it, { status: u.status, deadline: u.deadline, started_at: u.started_at, reason: u.reason,
+                        priority: u.priority, priority_at: u.priority_at });
+    if (u.status === 'READY' && !wasReady && o.waiter === deviceName())
+      toast('Bàn ' + o.table + ': ' + it.name + ' đã xong');
+    if (u.status === 'CANCELLED' && o.waiter === deviceName())
+      toast('Bàn ' + o.table + ': ' + it.name + ' bị hủy' + (u.reason ? ' (' + u.reason + ')' : ''), true);
+    renderSent();
+  });
+}
 
 setInterval(() => {
-  fetch('/api/heartbeat', { method: 'POST', body: JSON.stringify({ command: 'PING', name: deviceName() }) })
-    .catch(() => {});
+  post('/api/heartbeat', { command: 'PING', name: deviceName() })
+    .then(d => syncClock(d.server_time)).catch(() => {});
 }, 5000);
+setInterval(renderSent, 1000);   // đồng hồ "còn m:ss"
+
+loadAll().catch(() => document.getElementById('menu').textContent = 'Không tải được thực đơn');
+connect();
 </script>
 </body>
 </html>

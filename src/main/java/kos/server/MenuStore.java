@@ -15,7 +15,7 @@ import java.util.List;
  * Thực đơn của quán (F10). Đọc data/menu.json nếu có, nếu không thì dùng menu.json mẫu đóng gói sẵn.
  * Mọi thay đổi được ghi lại vào data/menu.json.
  * Sau khi sửa thực đơn, gọi ctx.menuChanged() để đẩy MENU_UPDATE tới mọi thiết bị.
- * TODO (Cường): giao diện thẻ Thực đơn dùng addOrUpdate, delete, setSoldOut rồi gọi ctx.menuChanged().
+ * Thẻ Thực đơn của ManagerWindow dùng addOrUpdate, delete, setSoldOut rồi gọi ctx.menuChanged().
  */
 public class MenuStore {
 

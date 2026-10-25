@@ -12,7 +12,7 @@ import java.util.Map;
  * Bảng thiết bị web (trang gọi món, thiết bị rung) cho thẻ Thiết bị của quầy quản lý (F11).
  * Trang web gửi heartbeat mỗi 5 giây; quá 15 giây không có tin thì coi là mất kết nối.
  * Màn hình bếp (TCP) nằm ở ClientRegistry.
- * TODO (Cường): hiển thị getAll() trên thẻ Thiết bị, làm mới mỗi giây.
+ * Thẻ Thiết bị của ManagerWindow đọc getAll() mỗi giây.
  */
 public class DeviceRegistry {
 

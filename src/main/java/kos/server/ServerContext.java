@@ -4,13 +4,15 @@ import kos.common.Message;
 import kos.common.Protocol;
 
 import java.io.IOException;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
 /**
  * Gom các thành phần dùng chung của máy chủ để truyền cho ClientHandler, WebGateway, KitchenController
- * và giao diện quầy quản lý.
- * TODO (Cường): chuyển log() sang thẻ Log của giao diện quầy quản lý.
+ * và giao diện quầy quản lý (ManagerWindow).
  */
 public class ServerContext {
 
@@ -23,6 +25,7 @@ public class ServerContext {
     private final DeviceRegistry devices;
     private final PagerDispatcher pagers;
     private final KitchenController kitchen;
+    private final List<Consumer<String>> logListeners = new CopyOnWriteArrayList<>();
 
     public ServerContext(MenuStore menu, OrderStore orders) {
         this.menu = menu;
@@ -87,7 +90,16 @@ public class ServerContext {
         }
     }
 
+    /** Giao diện quầy quản lý đăng ký để nhận từng dòng log. */
+    public void addLogListener(Consumer<String> listener) {
+        logListeners.add(listener);
+    }
+
     public void log(String text) {
-        System.out.println("[" + LocalTime.now().format(TIME) + "] " + text);
+        String line = "[" + LocalTime.now().format(TIME) + "] " + text;
+        System.out.println(line);
+        for (Consumer<String> l : logListeners) {
+            l.accept(line);
+        }
     }
 }

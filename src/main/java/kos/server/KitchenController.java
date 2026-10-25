@@ -101,6 +101,44 @@ public class KitchenController implements KitchenTimer.DeadlineHandler {
     }
 
     /**
+     * Xin ưu tiên (F14) từ trang gọi món hoặc quầy quản lý.
+     *
+     * @return ERROR để trả lại nơi gửi, hoặc null nếu mọi món đều thành công
+     */
+    public Message priority(Message req, String by) {
+        if (req.items == null || req.items.isEmpty()) {
+            return Message.error(req.reqId, "Chưa chọn món");
+        }
+        OrderStore.BatchResult r = ctx.orders().setPriority(req.items, System.currentTimeMillis());
+        for (OrderStore.Change c : r.changed()) {
+            broadcast(c, by);
+            ctx.log(by + " xin ưu tiên: " + c.item().name + " x" + c.item().qty
+                    + " (bàn " + c.order().table + ", đơn " + c.order().orderId + ")");
+        }
+        if (!r.changed().isEmpty()) {
+            checkPriorityQueue();
+            ctx.save();
+        }
+        return r.errors().isEmpty() ? null : Message.error(req.reqId, String.join("; ", r.errors()));
+    }
+
+    /** Cảnh báo khi hàng đợi ưu tiên quá dài (dấu hiệu phục vụ lạm dụng ưu tiên). */
+    public void checkPriorityQueue() {
+        int queue = ctx.orders().priorityQueue().size();
+        if (queue >= Protocol.PRIORITY_ALERT_COUNT) {
+            ctx.log("CẢNH BÁO: hàng đợi ưu tiên đang có " + queue + " món, kiểm tra việc xin ưu tiên");
+        }
+    }
+
+    /** Quầy quản lý đẩy ưu tiên một món. Trả về thông báo lỗi, hoặc null nếu thành công. */
+    public String prioritize(int orderId, int itemNo, String by) {
+        Message m = new Message(Protocol.PRIORITY_ITEMS);
+        m.items = List.of(kos.common.OrderItem.ref(orderId, itemNo));
+        Message err = priority(m, by);
+        return err == null ? null : err.message;
+    }
+
+    /**
      * Quản lý hủy một món tại quầy (F10). Chỉ hủy được món bếp chưa nhận làm.
      *
      * @return thông báo lỗi, hoặc null nếu đã hủy
@@ -173,6 +211,8 @@ public class KitchenController implements KitchenTimer.DeadlineHandler {
         m.deadline = c.item().deadline;
         m.extendedMinutes = c.item().extendedMinutes;
         m.reason = c.item().reason;
+        m.priority = c.item().priority;
+        m.priorityAt = c.item().priorityAt;
         m.by = by;
         m.serverTime = System.currentTimeMillis();
         ctx.broadcast(m);

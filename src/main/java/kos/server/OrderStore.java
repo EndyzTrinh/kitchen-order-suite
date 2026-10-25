@@ -74,11 +74,26 @@ public class OrderStore {
             return new AddResult(null, "Đơn không có món", false);
         }
 
+        int wantPriority = 0;
+        for (OrderItem req : requested) {
+            if (req.isPriority()) {
+                wantPriority++;
+            }
+        }
+        if (wantPriority > 0) {
+            int has = countPendingPriority(table);
+            if (has + wantPriority > Protocol.MAX_PRIORITY_PER_TABLE) {
+                return new AddResult(null, "Bàn " + table + " đang có " + has + " món ưu tiên, tối đa "
+                        + Protocol.MAX_PRIORITY_PER_TABLE + " món", false);
+            }
+        }
+
+        long now = System.currentTimeMillis();
         Order order = new Order();
         order.table = table;
         order.pagerId = pagerId;
         order.waiter = waiter;
-        order.createdAt = System.currentTimeMillis();
+        order.createdAt = now;
         int itemNo = 1;
         for (OrderItem req : requested) {
             MenuItem m = req.menuId == null ? null : menu.find(req.menuId);
@@ -103,6 +118,10 @@ public class OrderStore {
             it.prepMinutes = m.prepMinutes;
             it.status = ItemStatus.PENDING;
             it.extendedMinutes = 0;
+            if (req.isPriority()) {
+                it.priority = true;
+                it.priorityAt = now;
+            }
             order.items.add(it);
         }
         order.orderId = nextOrderId++;
@@ -179,6 +198,72 @@ public class OrderStore {
             changed.add(c);
         }
         return new BatchResult(changed, errors);
+    }
+
+    /**
+     * Xin ưu tiên (F14): đánh dấu món đang chờ làm để bếp làm trước.
+     * Chỉ áp dụng cho món PENDING; mỗi bàn tối đa MAX_PRIORITY_PER_TABLE món ưu tiên đang chờ.
+     * Hàng đợi ưu tiên xếp theo priority_at: bàn nào xin trước được làm trước.
+     */
+    public synchronized BatchResult setPriority(List<OrderItem> refs, long now) {
+        List<Change> changed = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
+        for (OrderItem ref : refs) {
+            Change c = locate(ref, errors);
+            if (c == null) {
+                continue;
+            }
+            OrderItem it = c.item();
+            if (it.status == ItemStatus.COOKING) {
+                errors.add(label(c) + ": bếp đang làm món này rồi");
+                continue;
+            }
+            if (it.status != ItemStatus.PENDING) {
+                errors.add(label(c) + " không còn chờ làm");
+                continue;
+            }
+            if (it.isPriority()) {
+                errors.add(label(c) + " đã được ưu tiên");
+                continue;
+            }
+            int has = countPendingPriority(c.order().table);
+            if (has >= Protocol.MAX_PRIORITY_PER_TABLE) {
+                errors.add("Bàn " + c.order().table + " đã có " + has + " món ưu tiên, tối đa "
+                        + Protocol.MAX_PRIORITY_PER_TABLE + " món");
+                continue;
+            }
+            it.priority = true;
+            it.priorityAt = now;
+            changed.add(c);
+        }
+        return new BatchResult(changed, errors);
+    }
+
+    /** Số món ưu tiên đang chờ làm của một bàn (tính trên mọi đơn của bàn đó). */
+    private int countPendingPriority(int table) {
+        int n = 0;
+        for (Order o : orders.values()) {
+            if (o.table == table) {
+                for (OrderItem it : o.items) {
+                    if (it.status == ItemStatus.PENDING && it.isPriority()) {
+                        n++;
+                    }
+                }
+            }
+        }
+        return n;
+    }
+
+    /** Hàng đợi ưu tiên: các món ưu tiên đang chờ làm, xếp theo thời điểm xin (sớm nhất trước). */
+    public synchronized List<Change> priorityQueue() {
+        List<Change> list = new ArrayList<>();
+        for (Change c : itemsWithStatus(ItemStatus.PENDING)) {
+            if (c.item().isPriority()) {
+                list.add(c);
+            }
+        }
+        list.sort((a, b) -> Long.compare(a.item().priorityAt, b.item().priorityAt));
+        return list;
     }
 
     /** Báo hết món (F07): hủy mọi phần của món này còn đang chờ nhận làm; phần đang làm giữ nguyên. */
@@ -260,6 +345,12 @@ public class OrderStore {
             }
         }
         return list;
+    }
+
+    /** Bản sao sâu các đơn chưa hoàn tất, để giao diện đọc thoải mái mà không đụng dữ liệu thật. */
+    public synchronized List<Order> snapshotCopy() {
+        return Json.GSON.fromJson(Json.GSON.toJson(getOpenOrders()),
+                new com.google.gson.reflect.TypeToken<List<Order>>() { }.getType());
     }
 
     /** Các món đang ở một trạng thái (dùng khi khởi động lại để đặt lại đồng hồ, gửi lại lệnh rung). */

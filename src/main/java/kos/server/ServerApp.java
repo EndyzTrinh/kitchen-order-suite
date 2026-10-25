@@ -2,6 +2,9 @@ package kos.server;
 
 import kos.common.Protocol;
 
+import javax.swing.JOptionPane;
+import javax.swing.SwingUtilities;
+import java.awt.GraphicsEnvironment;
 import java.io.IOException;
 import java.net.BindException;
 import java.net.Inet4Address;
@@ -11,89 +14,140 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.Scanner;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Điểm khởi động máy chủ. Hiện chạy trên console.
- * TODO (Cường): giao diện Swing của quầy quản lý (thẻ Đơn hàng, Thực đơn, Thiết bị, Log).
- * Giao diện chỉ cần gọi các hàm có sẵn qua ServerContext:
- *   ctx.orders().getOpenOrders()                  danh sách đơn
- *   ctx.kitchen().cancelItem(đơn, món, lý do, "Quản lý")   hủy món chưa làm
- *   ctx.pagers().describeOpenCalls() / confirmManually(callId)   lệnh rung đang mở, xác nhận thủ công
- *   ctx.menu().addOrUpdate / delete / setSoldOut rồi ctx.menuChanged()   quản lý món
- *   ctx.devices().getAll(), ctx.clients().getAll()   bảng thiết bị
+ * Điểm khởi động máy chủ kiêm quầy quản lý.
+ * Mặc định mở cửa sổ quầy quản lý (ManagerWindow). Chạy với tham số --console (hoặc trên máy không có
+ * màn hình) thì chỉ dùng cửa sổ Output, tắt bằng lệnh exit.
  */
 public class ServerApp {
 
-    public static void main(String[] args) throws IOException {
-        MenuStore menu = new MenuStore();
-        menu.load();
-        OrderStore orders = new OrderStore(menu);
-        ServerContext ctx = new ServerContext(menu, orders);
-        ctx.log("Đã nạp " + menu.getAll().size() + " món");
-        restoreOrders(ctx);
+    private static ServerContext ctx;
+    private static WebGateway web;
+    private static ServerSocket tcp;
+    private static boolean stopped;
 
-        WebGateway web = new WebGateway(ctx);
-        ServerSocket tcp;
+    public static void main(String[] args) throws Exception {
+        boolean console = GraphicsEnvironment.isHeadless() || Arrays.asList(args).contains("--console");
+
+        MenuStore menu = new MenuStore();
+        OrderStore orders = new OrderStore(menu);
+        ctx = new ServerContext(menu, orders);
+
+        ManagerWindow[] window = new ManagerWindow[1];
+        if (!console) {
+            // Mở cửa sổ trước để thẻ Log nhận được mọi dòng từ lúc khởi động.
+            SwingUtilities.invokeAndWait(() -> {
+                window[0] = new ManagerWindow(ctx, ServerApp::shutdown);
+                window[0].setVisible(true);
+            });
+        }
+
+        try {
+            menu.load();
+        } catch (IOException e) {
+            fail(console, "Không đọc được thực đơn: " + e.getMessage());
+            return;
+        }
+        ctx.log("Đã nạp " + menu.getAll().size() + " món");
+        restoreOrders();
+
+        web = new WebGateway(ctx);
         try {
             web.start();
-            tcp = startTcp(ctx);
+            tcp = startTcp();
         } catch (BindException e) {
+            web.stop();
             ctx.log("LỖI: cổng " + Protocol.HTTP_PORT + " hoặc " + Protocol.TCP_PORT + " đang bị chiếm.");
             ctx.log("Thường là ServerApp lần trước chưa tắt hẳn. Mở cmd và gõ:");
             ctx.log("   netstat -ano | findstr \":" + Protocol.HTTP_PORT + " :" + Protocol.TCP_PORT + "\"");
             ctx.log("rồi tắt chương trình ở dòng LISTENING bằng: taskkill /PID <số cuối dòng> /F");
-            web.stop();
-            System.exit(1);
+            fail(console, "Cổng " + Protocol.HTTP_PORT + " hoặc " + Protocol.TCP_PORT + " đang bị chiếm.\n"
+                    + "Có thể ServerApp lần trước chưa tắt hẳn. Xem hướng dẫn trong thẻ Log / cửa sổ Output.");
             return;
         }
         ctx.pagers().start();
         ctx.kitchen().resume();
-        printAddresses(ctx);
-        ctx.log("Gõ exit rồi Enter (ở dòng nhập phía dưới Output) để tắt máy chủ đúng cách.");
 
-        waitForExit(ctx, web, tcp);
+        List<String> addresses = addresses();
+        for (String a : addresses) {
+            ctx.log(a);
+        }
+        if (window[0] != null) {
+            SwingUtilities.invokeLater(() -> window[0].setAddresses(addresses));
+        }
+        ctx.log("Tắt máy chủ: bấm nút \"Tắt máy chủ\" trên cửa sổ, hoặc gõ exit rồi Enter trong Output.");
+
+        if (console) {
+            waitForExit();
+        } else {
+            Thread t = new Thread(ServerApp::waitForExit, "console-exit");
+            t.setDaemon(true);
+            t.start();
+        }
+    }
+
+    private static void fail(boolean console, String text) {
+        if (!console) {
+            JOptionPane.showMessageDialog(null, text, "Không khởi động được máy chủ", JOptionPane.ERROR_MESSAGE);
+        }
+        System.exit(1);
+    }
+
+    /** Chờ lệnh exit trên console. Không có bàn phím (chạy nền) thì giữ máy chủ chạy mãi. */
+    private static void waitForExit() {
+        Scanner sc = new Scanner(System.in, StandardCharsets.UTF_8);
+        while (sc.hasNextLine()) {
+            if (sc.nextLine().trim().equalsIgnoreCase("exit")) {
+                shutdown();
+                return;
+            }
+        }
+        try {
+            new CountDownLatch(1).await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**
-     * Chờ lệnh exit trên console rồi tắt sạch: lưu dữ liệu, đóng cổng, dừng các luồng.
-     * Dùng cách này thay cho nút dừng của NetBeans, vì nút đó đôi khi để lại tiến trình Java chạy ngầm.
+     * Tắt sạch: lưu dữ liệu, đóng cổng, dừng các luồng rồi thoát.
+     * Dùng thay cho nút dừng của NetBeans, vì nút đó đôi khi để lại tiến trình Java chạy ngầm.
      */
-    private static void waitForExit(ServerContext ctx, WebGateway web, ServerSocket tcp) {
-        boolean exitRequested = false;
-        Scanner sc = new Scanner(System.in, StandardCharsets.UTF_8);
-        while (!exitRequested && sc.hasNextLine()) {
-            exitRequested = sc.nextLine().trim().equalsIgnoreCase("exit");
+    public static synchronized void shutdown() {
+        if (stopped) {
+            return;
         }
-        if (!exitRequested) {
-            // Không có bàn phím (ví dụ chạy nền): giữ máy chủ chạy mãi.
-            try {
-                new CountDownLatch(1).await();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
+        stopped = true;
         ctx.log("Đang tắt máy chủ...");
         ctx.save();
         ctx.kitchen().shutdown();
         ctx.pagers().shutdown();
         ctx.webHub().shutdown();
-        web.stop();
-        try {
-            tcp.close();
-        } catch (IOException ignored) {
-            // bỏ qua
+        if (web != null) {
+            web.stop();
+        }
+        if (tcp != null) {
+            try {
+                tcp.close();
+            } catch (IOException ignored) {
+                // bỏ qua
+            }
         }
         ctx.log("Đã tắt.");
         System.exit(0);
     }
 
     /** Nạp lại các đơn chưa hoàn tất từ data/orders.json (F12). File hỏng thì đổi tên và chạy với dữ liệu rỗng. */
-    private static void restoreOrders(ServerContext ctx) {
+    private static void restoreOrders() {
         try {
             String json = DataFile.read(DataFile.ORDERS);
             if (json == null) {
@@ -112,7 +166,7 @@ public class ServerApp {
         }
     }
 
-    private static ServerSocket startTcp(ServerContext ctx) throws IOException {
+    private static ServerSocket startTcp() throws IOException {
         ServerSocket serverSocket = new ServerSocket(Protocol.TCP_PORT);
         ExecutorService pool = Executors.newCachedThreadPool();
         Thread acceptor = new Thread(() -> {
@@ -133,8 +187,9 @@ public class ServerApp {
         return serverSocket;
     }
 
-    /** In các địa chỉ IPv4 của máy để biết cần mở địa chỉ nào trên iPad / iPhone. */
-    private static void printAddresses(ServerContext ctx) throws SocketException {
+    /** Các địa chỉ IPv4 của máy, để biết cần mở địa chỉ nào trên iPad / iPhone. */
+    static List<String> addresses() throws SocketException {
+        List<String> list = new ArrayList<>();
         for (NetworkInterface ni : Collections.list(NetworkInterface.getNetworkInterfaces())) {
             if (!ni.isUp() || ni.isLoopback() || ni.isVirtual()) {
                 continue;
@@ -142,10 +197,11 @@ public class ServerApp {
             for (InetAddress addr : Collections.list(ni.getInetAddresses())) {
                 if (addr instanceof Inet4Address) {
                     String ip = addr.getHostAddress();
-                    ctx.log(ni.getDisplayName() + ": gọi món http://" + ip + ":" + Protocol.HTTP_PORT
+                    list.add(ni.getDisplayName() + ": gọi món http://" + ip + ":" + Protocol.HTTP_PORT
                             + "/order  |  thiết bị rung http://" + ip + ":" + Protocol.HTTP_PORT + "/pager?id=1");
                 }
             }
         }
+        return list;
     }
 }
