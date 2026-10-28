@@ -51,6 +51,15 @@ public class ClientRegistry {
         }
     }
 
+    /** Ngắt mọi màn hình bếp đang dùng tài khoản username (khi bị khóa, đổi vai trò...). */
+    public void kick(String username, String reason) {
+        for (ClientHandler c : clients) {
+            if (username.equals(c.getUsername())) {
+                c.kick(reason);
+            }
+        }
+    }
+
     public List<ClientHandler> getAll() {
         return List.copyOf(clients);
     }

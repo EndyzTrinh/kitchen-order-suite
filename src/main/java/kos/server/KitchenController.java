@@ -38,13 +38,14 @@ public class KitchenController implements KitchenTimer.DeadlineHandler {
         OrderStore.BatchResult r;
         switch (req.command) {
             case Protocol.START_ITEMS -> {
-                r = ctx.orders().startItems(req.items, System.currentTimeMillis());
+                String chef = req.chef == null || req.chef.isBlank() ? "Không rõ" : req.chef.trim();
+                r = ctx.orders().startItems(req.items, System.currentTimeMillis(), chef);
                 for (OrderStore.Change c : r.changed()) {
                     timer.schedule(c.order().orderId, c.item().itemNo, c.item().deadline);
                     broadcast(c, by);
                 }
                 if (!r.changed().isEmpty()) {
-                    ctx.log(by + " nhận làm " + r.changed().size() + " món");
+                    ctx.log(chef + " nhận làm " + r.changed().size() + " món");
                 }
             }
             case Protocol.EXTEND_ITEMS -> {
@@ -52,12 +53,27 @@ public class KitchenController implements KitchenTimer.DeadlineHandler {
                 if (minutes < 1 || minutes > Protocol.MAX_EXTEND_MINUTES) {
                     return Message.error(req.reqId, "Số phút gia hạn không hợp lệ");
                 }
-                r = ctx.orders().extendItems(req.items, minutes);
+                r = ctx.orders().extendItems(req.items, minutes, req.reason);
                 for (OrderStore.Change c : r.changed()) {
                     timer.schedule(c.order().orderId, c.item().itemNo, c.item().deadline);
                     broadcast(c, by);
                     ctx.log(by + " gia hạn +" + minutes + " phút: " + c.item().name
-                            + " (đơn " + c.order().orderId + ", bàn " + c.order().table + ")");
+                            + " (đơn " + c.order().orderId + ", bàn " + c.order().table + ")"
+                            + (req.reason == null ? "" : " - lý do: " + req.reason));
+                }
+            }
+            case Protocol.NOT_DONE -> {
+                int minutes = req.minutes == null ? 0 : req.minutes;
+                if (minutes < 1 || minutes > Protocol.MAX_EXTEND_MINUTES) {
+                    return Message.error(req.reqId, "Số phút thêm không hợp lệ");
+                }
+                r = ctx.orders().notDone(req.items, minutes, req.reason, System.currentTimeMillis());
+                for (OrderStore.Change c : r.changed()) {
+                    ctx.pagers().withdraw(c.order().orderId, c.item().itemNo);
+                    timer.schedule(c.order().orderId, c.item().itemNo, c.item().deadline);
+                    broadcast(c, by);
+                    ctx.log("CẢNH BÁO: " + by + " báo chưa xong " + c.item().name + " (bàn " + c.order().table
+                            + "), thêm " + minutes + " phút - " + (req.reason == null ? "Khác" : req.reason));
                 }
             }
             case Protocol.FINISH_ITEMS -> {
@@ -174,6 +190,7 @@ public class KitchenController implements KitchenTimer.DeadlineHandler {
         List<OrderStore.Change> changes = ctx.orders().markServed(orderId, itemNos);
         for (OrderStore.Change c : changes) {
             broadcast(c, by);
+            ctx.history().record(c.order(), c.item());
         }
         if (!changes.isEmpty()) {
             ctx.save();
@@ -213,6 +230,8 @@ public class KitchenController implements KitchenTimer.DeadlineHandler {
         m.reason = c.item().reason;
         m.priority = c.item().priority;
         m.priorityAt = c.item().priorityAt;
+        m.chef = c.item().chef;
+        m.finishedAt = c.item().finishedAt;
         m.by = by;
         m.serverTime = System.currentTimeMillis();
         ctx.broadcast(m);

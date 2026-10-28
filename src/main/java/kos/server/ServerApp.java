@@ -1,9 +1,16 @@
 package kos.server;
 
 import kos.common.Protocol;
+import kos.common.Role;
+import kos.common.Theme;
+import kos.kitchen.MasterchefApp;
+import kos.ui.AuthApi;
+import kos.ui.HomeWindow;
+import kos.ui.Tiles;
 
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
+import java.awt.Color;
 import java.awt.GraphicsEnvironment;
 import java.io.IOException;
 import java.net.BindException;
@@ -34,6 +41,7 @@ public class ServerApp {
     private static WebGateway web;
     private static ServerSocket tcp;
     private static boolean stopped;
+    private static HomeWindow home;
 
     public static void main(String[] args) throws Exception {
         boolean console = GraphicsEnvironment.isHeadless() || Arrays.asList(args).contains("--console");
@@ -44,11 +52,11 @@ public class ServerApp {
 
         ManagerWindow[] window = new ManagerWindow[1];
         if (!console) {
-            // Mở cửa sổ trước để thẻ Log nhận được mọi dòng từ lúc khởi động.
-            SwingUtilities.invokeAndWait(() -> {
-                window[0] = new ManagerWindow(ctx, ServerApp::shutdown);
-                window[0].setVisible(true);
-            });
+            Theme.install();
+            // Tạo cửa sổ quầy quản lý trước (chưa hiện) để thẻ Log nhận được mọi dòng từ lúc khởi động.
+            // F16: chỉ Quản lý mở được cửa sổ này, từ trang chủ hệ thống sau khi đăng nhập.
+            SwingUtilities.invokeAndWait(() -> window[0] = new ManagerWindow(ctx, ServerApp::shutdown,
+                    () -> home == null || home.session() == null ? "?" : home.session().user().username));
         }
 
         try {
@@ -58,6 +66,8 @@ public class ServerApp {
             return;
         }
         ctx.log("Đã nạp " + menu.getAll().size() + " món");
+        ctx.history().load();
+        ctx.accounts().load();
         restoreOrders();
 
         web = new WebGateway(ctx);
@@ -82,7 +92,11 @@ public class ServerApp {
             ctx.log(a);
         }
         if (window[0] != null) {
-            SwingUtilities.invokeLater(() -> window[0].setAddresses(addresses));
+            ManagerWindow w = window[0];
+            SwingUtilities.invokeLater(() -> {
+                w.setAddresses(addresses);
+                openHome(w);
+            });
         }
         ctx.log("Tắt máy chủ: bấm nút \"Tắt máy chủ\" trên cửa sổ, hoặc gõ exit rồi Enter trong Output.");
 
@@ -93,6 +107,71 @@ public class ServerApp {
             t.setDaemon(true);
             t.start();
         }
+    }
+
+    /** Giao diện hệ thống chung trên máy chủ (F16): đăng nhập, rồi các ô chức năng theo vai trò. */
+    private static void openHome(ManagerWindow manager) {
+        String ip = firstIp();
+        home = new HomeWindow("Kitchen Order Suite - Máy chủ", new LocalAuth(ctx.accounts()), new HomeWindow.Host() {
+            @Override
+            public List<HomeWindow.Tile> tiles(AuthApi.Session s) {
+                boolean m = s.user().role.canManage();
+                int pending = ctx.accounts().pendingCount();
+                String lock = "cần vai trò Quản lý";
+                return List.of(
+                        new HomeWindow.Tile("Quầy quản lý", "Đơn đang mở, hủy món, đẩy ưu tiên, thiết bị, nhật ký máy chủ.", "Q", Tiles.ORANGE, m, lock,
+                                () -> manager.showTab("Đơn hàng")),
+                        Tiles.kitchen(s, () -> MasterchefApp.openFor("localhost", s, home)),
+                        Tiles.order(s, ip, home),
+                        Tiles.pager(s, ip, home),
+                        new HomeWindow.Tile("Thực đơn", "Thêm, sửa món, thời gian chuẩn, tạm hết món.", "T", Tiles.TEAL, m, lock,
+                                () -> manager.showTab("Thực đơn")),
+                        new HomeWindow.Tile("Thống kê", "Chuẩn / thực tế theo món, khung giờ, người làm. Xuất CSV.", "S", Tiles.PURPLE, m, lock,
+                                () -> manager.showTab("Thống kê")),
+                        new HomeWindow.Tile("Tài khoản", (m && pending > 0 ? "<b style='color:#ea580c'>"
+                                + pending + " tài khoản chờ duyệt.</b><br>" : "") + "Duyệt, đổi vai trò, khóa, đặt lại mật khẩu.", "P", Theme.DANGER, m, lock,
+                                () -> manager.showTab("Tài khoản")),
+                        new HomeWindow.Tile("Tắt máy chủ", "Lưu đơn đang làm rồi tắt. Mở lại sẽ khôi phục.",
+                                "X", new Color(71, 85, 105), m, lock, manager::confirmShutdown));
+            }
+
+            @Override
+            public void onLogout(AuthApi.Session s) {
+                manager.setVisible(false);
+                MasterchefApp.closeAll();
+            }
+
+            @Override
+            public void onClose(AuthApi.Session s) {
+                if (s != null && s.user().role == Role.QUAN_LY) {
+                    manager.confirmShutdown();
+                } else {
+                    JOptionPane.showMessageDialog(home, "Máy chủ đang chạy cho bếp và phục vụ.\n"
+                            + "Chỉ Quản lý được tắt máy chủ: đăng nhập tài khoản Quản lý rồi bấm \"Tắt máy chủ\".",
+                            "Không tắt được", JOptionPane.INFORMATION_MESSAGE);
+                }
+            }
+        });
+        home.setVisible(true);
+    }
+
+    /** IPv4 đầu tiên của máy (để ghi địa chỉ cho iPad / điện thoại), không có thì localhost. */
+    static String firstIp() {
+        try {
+            for (NetworkInterface ni : Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                if (!ni.isUp() || ni.isLoopback() || ni.isVirtual()) {
+                    continue;
+                }
+                for (InetAddress addr : Collections.list(ni.getInetAddresses())) {
+                    if (addr instanceof Inet4Address) {
+                        return addr.getHostAddress();
+                    }
+                }
+            }
+        } catch (SocketException ignored) {
+            // dùng localhost
+        }
+        return "localhost";
     }
 
     private static void fail(boolean console, String text) {
@@ -106,9 +185,25 @@ public class ServerApp {
     private static void waitForExit() {
         Scanner sc = new Scanner(System.in, StandardCharsets.UTF_8);
         while (sc.hasNextLine()) {
-            if (sc.nextLine().trim().equalsIgnoreCase("exit")) {
+            String line = sc.nextLine().trim();
+            if (line.equalsIgnoreCase("exit")) {
                 shutdown();
                 return;
+            }
+            // taoql <tên đăng nhập> <mật khẩu> <họ tên>: tạo tài khoản Quản lý đầu tiên khi chạy không giao diện
+            String[] p = line.split("\\s+", 4);
+            if (p[0].equalsIgnoreCase("taoql")) {
+                try {
+                    if (p.length < 4) {
+                        throw new AccountStore.AuthError("Cú pháp: taoql <tên đăng nhập> <mật khẩu> <họ tên>");
+                    }
+                    if (!ctx.accounts().isEmpty()) {
+                        throw new AccountStore.AuthError("Đã có tài khoản; thêm tài khoản mới trong thẻ Tài khoản");
+                    }
+                    ctx.log(ctx.accounts().register(p[1], p[3], p[2], null, "console", true));
+                } catch (AccountStore.AuthError e) {
+                    ctx.log("Lỗi: " + e.getMessage());
+                }
             }
         }
         try {

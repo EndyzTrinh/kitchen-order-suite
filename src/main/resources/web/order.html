@@ -3,77 +3,145 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>Gọi món</title>
 <!--
   Trang gọi món cho iPad / điện thoại của phục vụ (F02, F03, F14).
-  - Thẻ "Gọi món": chọn bàn, món, số lượng, ghi chú, đánh dấu Ưu tiên, gửi bếp (POST /api/order).
-  - Thẻ "Đơn đã gửi": trạng thái từng món theo thời gian thực (SSE /api/events), đẩy ưu tiên (POST /api/priority).
+  - Thẻ "Gọi món": chọn bàn, tìm món, số lượng, ghi chú, đánh dấu Ưu tiên, gửi bếp (POST /api/order).
+  - Thẻ "Đơn đã gửi": trạng thái từng món theo thời gian thực (SSE /api/events), thanh tiến độ món đang làm,
+    đẩy ưu tiên (POST /api/priority).
   - Gửi heartbeat mỗi 5 giây (POST /api/heartbeat) để quầy biết thiết bị còn hoạt động.
 -->
 <style>
-  :root { --bg:#f4f3ef; --card:#fff; --ink:#1d1d1f; --muted:#6e6e73; --line:#e3e1db;
-          --red:#c0392b; --orange:#e67e22; --orange-soft:#ffe0b2; --green:#27ae60; --blue:#2e86de; }
-  * { box-sizing: border-box; }
-  body { margin:0; font-family:-apple-system, system-ui, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink);
-         -webkit-tap-highlight-color: transparent; }
-  header { position:sticky; top:0; z-index:5; background:#1d1d1f; color:#fff; padding:10px 16px 0; }
-  .hrow { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-  .hrow label { font-size:12px; color:#bbb; display:flex; flex-direction:column; gap:2px; }
-  .hrow input { width:110px; font-size:16px; padding:6px 8px; border-radius:8px; border:0; }
-  .hrow input.small { width:64px; }
-  #conn { margin-left:auto; font-size:13px; color:#f39c12; }
-  #conn.ok { color:#6fcf73; }
-  .tabs { display:flex; margin-top:10px; }
-  .tabs button { flex:1; background:none; border:0; color:#aaa; font-size:16px; padding:10px; border-bottom:3px solid transparent; }
-  .tabs button.on { color:#fff; border-bottom-color:var(--orange); font-weight:600; }
-  main { padding:14px 16px 120px; max-width:900px; margin:0 auto; }
-  .tablepick { display:flex; align-items:center; gap:10px; margin-bottom:12px; font-size:17px; }
-  .tablepick input { width:90px; font-size:20px; padding:8px; border-radius:10px; border:1px solid #bbb; text-align:center; }
-  .item { background:var(--card); border-radius:12px; padding:10px 12px; margin-bottom:8px; border:2px solid transparent; }
-  .item.soldout { opacity:.4; }
-  .item.prio { border-color:var(--orange); background:#fff8ee; }
-  .top { display:flex; justify-content:space-between; align-items:center; gap:8px; }
-  .name { font-size:17px; }
-  .price { color:var(--muted); font-size:14px; }
-  .qty { display:flex; align-items:center; gap:8px; }
-  .qty button { width:40px; height:40px; font-size:22px; border-radius:50%; border:0; background:#e9e7e1; }
-  .qty span { min-width:22px; text-align:center; font-size:18px; font-weight:600; }
-  .extra { display:none; gap:8px; margin-top:8px; align-items:center; }
-  .extra input { flex:1; font-size:15px; padding:8px; border-radius:8px; border:1px solid #ccc; }
-  .star { border:2px solid var(--orange); background:#fff; color:var(--orange); border-radius:20px; padding:7px 12px;
-          font-size:14px; font-weight:600; white-space:nowrap; }
+  :root {
+    --bg:#f3f5f9; --card:#fff; --ink:#1e293b; --muted:#64748b; --line:#e2e8f0;
+    --primary:#2563eb; --primary-soft:#dbeafe; --green:#16a34a; --green-soft:#dcfce7;
+    --orange:#ea580c; --orange-soft:#ffedd5; --red:#dc2626; --red-soft:#fee2e2;
+    --radius:16px; --shadow:0 1px 2px rgba(15,23,42,.06), 0 4px 14px rgba(15,23,42,.06);
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+         background:var(--bg); color:var(--ink); -webkit-tap-highlight-color:transparent; }
+  button { font-family:inherit; cursor:pointer; }
+  button:active { transform:scale(.97); }
+
+  /* đầu trang */
+  header { position:sticky; top:0; z-index:5; background:rgba(255,255,255,.92); backdrop-filter:blur(12px);
+           -webkit-backdrop-filter:blur(12px); border-bottom:1px solid var(--line); padding:10px 16px 10px; }
+  .hrow { display:flex; gap:10px; align-items:center; max-width:1120px; margin:0 auto; }
+  .brand { font-size:21px; font-weight:800; letter-spacing:-.3px; white-space:nowrap; }
+  .brand span { color:var(--primary); }
+  #conn { white-space:nowrap; font-size:13px; font-weight:600; padding:5px 10px; border-radius:99px; background:var(--orange-soft); color:var(--orange); }
+  #conn.ok { background:var(--green-soft); color:var(--green); }
+  .settings { margin-left:auto; display:flex; gap:6px; }
+  .settings label { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted);
+                    background:var(--bg); border-radius:10px; padding:4px 4px 4px 10px; }
+  .settings input { width:84px; font-size:15px; padding:6px 8px; border-radius:8px; border:1px solid var(--line); background:#fff; }
+  .settings input.small { width:52px; text-align:center; }
+  .tabs { display:flex; gap:4px; background:var(--bg); border-radius:12px; padding:4px; max-width:1120px; margin:10px auto 0; }
+  .tabs button { flex:1; background:none; border:0; color:var(--muted); font-size:16px; font-weight:600; padding:10px; border-radius:9px; }
+  .tabs button.on { background:#fff; color:var(--ink); box-shadow:var(--shadow); }
+
+  main { padding:16px 16px 130px; max-width:1120px; margin:0 auto; }
+
+  /* chọn bàn + tìm món */
+  .toolbar { display:flex; gap:12px; align-items:stretch; margin-bottom:14px; flex-wrap:wrap; }
+  .tablepick { display:flex; align-items:center; gap:8px; background:var(--card); border-radius:var(--radius);
+               padding:8px 10px 8px 16px; box-shadow:var(--shadow); font-weight:700; }
+  .tablepick input { width:70px; font-size:24px; font-weight:800; padding:6px; border-radius:10px; border:2px solid var(--line);
+                     text-align:center; color:var(--primary); }
+  .tablepick input:focus, .search input:focus, .settings input:focus, .extra input:focus { outline:none; border-color:var(--primary); }
+  .round { width:42px; height:42px; border-radius:12px; border:0; background:var(--bg); font-size:22px; font-weight:700; color:var(--ink); }
+  .search { flex:1; min-width:200px; display:flex; }
+  .search input { width:100%; font-size:16px; padding:0 16px; border-radius:var(--radius); border:2px solid transparent;
+                  background:var(--card); box-shadow:var(--shadow); min-height:58px; }
+
+  /* thực đơn dạng thẻ */
+  #menu { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:12px; }
+  .item { background:var(--card); border-radius:var(--radius); padding:12px; box-shadow:var(--shadow);
+          border:2px solid transparent; transition:border-color .15s, background .15s; }
+  .item.picked { border-color:var(--primary); }
+  .item.prio { border-color:var(--orange); background:#fffaf5; }
+  .item.soldout { opacity:.45; }
+  .top { display:flex; align-items:center; gap:12px; }
+  .avatar { width:48px; height:48px; border-radius:14px; display:grid; place-items:center; color:#fff;
+            font-weight:800; font-size:20px; flex:none; }
+  .info { flex:1; min-width:0; }
+  .name { font-size:17px; font-weight:700; line-height:1.25; }
+  .price { color:var(--muted); font-size:14px; margin-top:2px; }
+  .tag { display:inline-block; font-size:12px; font-weight:700; padding:2px 8px; border-radius:99px; background:var(--red-soft); color:var(--red); margin-left:6px; }
+  .qty { display:flex; align-items:center; gap:6px; background:var(--bg); border-radius:14px; padding:4px; }
+  .qty button { width:40px; height:40px; font-size:22px; font-weight:700; border-radius:11px; border:0; background:#fff; color:var(--ink);
+                box-shadow:0 1px 2px rgba(0,0,0,.08); }
+  .qty button[data-d="1"] { background:var(--primary); color:#fff; }
+  .qty span { min-width:24px; text-align:center; font-size:18px; font-weight:800; }
+  .extra { display:none; gap:8px; margin-top:10px; align-items:center; }
+  .extra input { flex:1; min-width:0; font-size:15px; padding:10px 12px; border-radius:12px; border:2px solid var(--line); }
+  .star { border:2px solid var(--orange); background:#fff; color:var(--orange); border-radius:12px; padding:9px 12px;
+          font-size:14px; font-weight:700; white-space:nowrap; }
   .star.on { background:var(--orange); color:#fff; }
-  .bar { position:fixed; left:0; right:0; bottom:0; background:#fff; border-top:1px solid var(--line);
-         padding:10px 16px calc(10px + env(safe-area-inset-bottom)); display:flex; gap:12px; align-items:center; z-index:5; }
-  .bar .sum { flex:1; font-size:15px; color:var(--muted); }
-  .bar .sum b { color:var(--ink); font-size:18px; }
-  #send { padding:14px 26px; font-size:18px; border:0; border-radius:12px; background:var(--red); color:#fff; font-weight:600; }
-  #send:disabled { background:#aaa; }
-  .order { background:var(--card); border-radius:12px; padding:12px; margin-bottom:12px; }
-  .order h3 { margin:0 0 6px; font-size:18px; display:flex; justify-content:space-between; }
-  .order h3 small { color:var(--muted); font-weight:400; font-size:13px; }
-  .line { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:8px 0; border-top:1px solid var(--line); }
-  .line .what { font-size:16px; }
-  .line .what small { display:block; color:var(--muted); font-size:13px; }
-  .chip { font-size:13px; padding:4px 9px; border-radius:20px; white-space:nowrap; background:#eee; }
-  .s-PENDING { background:#eee; } .s-COOKING { background:#d6eaf8; } .s-READY { background:#d4efdf; }
-  .s-SERVED { background:#f0f0f0; color:#999; } .s-CANCELLED { background:#fadbd8; color:var(--red); }
-  .badge { background:var(--orange); color:#fff; font-size:12px; padding:3px 8px; border-radius:20px; margin-left:6px; }
-  .push { border:0; background:var(--orange-soft); color:#a04000; border-radius:8px; padding:8px 10px; font-size:14px; font-weight:600; }
-  .filter { display:flex; align-items:center; gap:8px; margin-bottom:10px; color:var(--muted); font-size:14px; }
-  .empty { text-align:center; color:var(--muted); padding:40px 0; }
-  #toast { position:fixed; left:50%; top:110px; transform:translateX(-50%); background:#1d1d1f; color:#fff; padding:12px 18px;
-           border-radius:12px; font-size:15px; max-width:90%; display:none; z-index:10; box-shadow:0 6px 20px rgba(0,0,0,.25); }
+
+  /* thanh gửi */
+  .bar { position:fixed; left:0; right:0; bottom:0; z-index:5; background:rgba(255,255,255,.95); backdrop-filter:blur(12px);
+         -webkit-backdrop-filter:blur(12px); border-top:1px solid var(--line);
+         padding:12px 16px calc(12px + env(safe-area-inset-bottom)); }
+  .bar .in { max-width:1120px; margin:0 auto; display:flex; gap:12px; align-items:center; }
+  .bar .sum { flex:1; font-size:14px; color:var(--muted); line-height:1.4; }
+  .bar .sum b { color:var(--ink); font-size:19px; }
+  #send { padding:16px 34px; font-size:18px; border:0; border-radius:14px; background:var(--primary); color:#fff; font-weight:800;
+          box-shadow:0 6px 16px rgba(37,99,235,.35); }
+  #send:disabled { background:#94a3b8; box-shadow:none; }
+
+  /* đơn đã gửi */
+  .filter { display:flex; align-items:center; gap:8px; margin-bottom:12px; color:var(--muted); font-size:14px; }
+  .filter input { width:18px; height:18px; }
+  #sent { display:grid; grid-template-columns:repeat(auto-fill, minmax(330px, 1fr)); gap:12px; align-items:start; }
+  .order { background:var(--card); border-radius:var(--radius); padding:14px 14px 6px; box-shadow:var(--shadow); }
+  .order h3 { margin:0 0 8px; font-size:20px; display:flex; justify-content:space-between; align-items:baseline; }
+  .order h3 small { color:var(--muted); font-weight:500; font-size:13px; }
+  .line { padding:10px 0; border-top:1px solid var(--line); }
+  .row { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .what { font-size:16px; font-weight:600; }
+  .what small { display:block; color:var(--muted); font-size:13px; font-weight:400; }
+  .chip { font-size:13px; font-weight:700; padding:5px 10px; border-radius:99px; white-space:nowrap; }
+  .s-PENDING { background:#e2e8f0; color:#334155; } .s-COOKING { background:var(--primary-soft); color:var(--primary); }
+  .s-READY { background:var(--green); color:#fff; } .s-SERVED { background:#f1f5f9; color:#94a3b8; }
+  .s-CANCELLED { background:var(--red-soft); color:var(--red); }
+  .progress { height:6px; border-radius:99px; background:#eef2f7; margin-top:8px; overflow:hidden; }
+  .progress i { display:block; height:100%; border-radius:99px; background:var(--primary); transition:width 1s linear; }
+  .progress i.late { background:var(--red); }
+  .badge { background:var(--orange); color:#fff; font-size:12px; font-weight:700; padding:3px 8px; border-radius:99px; margin-left:6px; }
+  .push { border:0; background:var(--orange-soft); color:var(--orange); border-radius:10px; padding:8px 10px; font-size:13px; font-weight:700; white-space:nowrap; }
+  .empty { text-align:center; color:var(--muted); padding:60px 0; grid-column:1/-1; }
+  .empty b { display:block; font-size:40px; margin-bottom:8px; }
+
+  #toast { position:fixed; left:50%; top:120px; transform:translateX(-50%); background:#0f172a; color:#fff; padding:13px 20px;
+           border-radius:14px; font-size:15px; font-weight:600; max-width:90%; display:none; z-index:10;
+           box-shadow:0 10px 30px rgba(0,0,0,.25); }
   #toast.err { background:var(--red); }
   .hidden { display:none !important; }
+  @media (max-width:560px) {
+    .settings label span { display:none; }
+    .settings label { padding:3px; }
+    .settings input { width:66px; font-size:14px; padding:5px 6px; }
+    .settings input.small { width:40px; }
+    .hrow { gap:6px; }
+    .brand { font-size:18px; }
+    #conn { font-size:12px; padding:4px 8px; }
+    #menu, #sent { grid-template-columns:1fr; }
+  }
 </style>
 </head>
 <body>
 <header>
   <div class="hrow">
-    <label>Tên thiết bị <input id="device"></label>
-    <label>Thiết bị rung <input id="pager" class="small" type="number" min="1" inputmode="numeric"></label>
-    <span id="conn">○ Đang kết nối...</span>
+    <div class="brand">Gọi <span>món</span></div>
+    <span id="conn">Đang kết nối...</span>
+    <div class="settings">
+      <label><span>Máy</span><input id="device"></label>
+      <label><span>Rung số</span><input id="pager" class="small" type="number" min="1" inputmode="numeric"></label>
+    </div>
   </div>
   <div class="tabs">
     <button id="tabOrder" class="on">Gọi món</button>
@@ -83,7 +151,14 @@
 
 <main>
   <section id="viewOrder">
-    <div class="tablepick">Bàn số <input id="table" type="number" min="1" inputmode="numeric"></div>
+    <div class="toolbar">
+      <div class="tablepick">Bàn
+        <button class="round" id="tableMinus">−</button>
+        <input id="table" type="number" min="1" inputmode="numeric" placeholder="?">
+        <button class="round" id="tablePlus">+</button>
+      </div>
+      <div class="search"><input id="search" type="search" placeholder="Tìm món... (gõ không dấu cũng được)"></div>
+    </div>
     <div id="menu">Đang tải thực đơn...</div>
   </section>
   <section id="viewSent" class="hidden">
@@ -93,8 +168,10 @@
 </main>
 
 <div class="bar" id="bar">
-  <div class="sum" id="sum">Chưa chọn món</div>
-  <button id="send">Gửi bếp</button>
+  <div class="in">
+    <div class="sum" id="sum">Chưa chọn món</div>
+    <button id="send" disabled>Gửi bếp</button>
+  </div>
 </div>
 <div id="toast"></div>
 
@@ -106,6 +183,7 @@ const draft = {};                    // menu_id -> { qty, note, priority }
 const orders = {};                   // order_id -> đơn (cập nhật bằng sự kiện)
 let clockOffset = 0;                 // giờ máy chủ - giờ máy này
 let counter = 0;
+const COLORS = ['#2563eb', '#16a34a', '#ea580c', '#9333ea', '#0891b2', '#db2777', '#ca8a04', '#4f46e5'];
 
 function store(key, value) { try { localStorage.setItem(key, value); } catch (e) {} }
 function load(key, def) { try { return localStorage.getItem(key) || def; } catch (e) { return def; } }
@@ -114,13 +192,21 @@ function fmt(n) { return Number(n || 0).toLocaleString('vi-VN') + 'đ'; }
 function now() { return Date.now() + clockOffset; }
 function mmss(ms) { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
 function deviceName() { return document.getElementById('device').value.trim() || 'WEB'; }
+/** Bỏ dấu tiếng Việt để tìm "pho" ra "Phở". */
+function plain(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase(); }
+function colorOf(id) { let h = 0; for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return COLORS[h % COLORS.length]; }
 
 const $device = document.getElementById('device');
 const $pager = document.getElementById('pager');
+const $table = document.getElementById('table');
 $device.value = load('kos.device', 'IPAD1');
 $pager.value = load('kos.pager', '1');
 $device.onchange = () => { store('kos.device', $device.value.trim()); renderSent(); };
 $pager.onchange = () => store('kos.pager', $pager.value);
+document.getElementById('tableMinus').onclick = () => { $table.value = Math.max(1, (Number($table.value) || 2) - 1); updateSum(); };
+document.getElementById('tablePlus').onclick = () => { $table.value = (Number($table.value) || 0) + 1; updateSum(); };
+$table.oninput = updateSum;
+document.getElementById('search').oninput = filterMenu;
 
 function toast(text, isError) {
   const t = document.getElementById('toast');
@@ -152,9 +238,11 @@ function renderMenu() {
     const d = draft[m.menu_id] || (draft[m.menu_id] = { qty: 0, note: '', priority: false });
     if (m.sold_out) { d.qty = 0; d.priority = false; }
     const div = document.createElement('div');
-    div.className = 'item' + (m.sold_out ? ' soldout' : '') + (d.priority && d.qty > 0 ? ' prio' : '');
+    div.className = 'item' + (m.sold_out ? ' soldout' : '');
+    div.dataset.key = plain(m.name + ' ' + m.menu_id);
     div.innerHTML =
-      '<div class="top"><div><div class="name">' + esc(m.name) + (m.sold_out ? ' (tạm hết)' : '') + '</div>' +
+      '<div class="top"><div class="avatar" style="background:' + colorOf(m.menu_id) + '">' + esc(m.name.charAt(0)) + '</div>' +
+      '<div class="info"><div class="name">' + esc(m.name) + (m.sold_out ? '<span class="tag">Tạm hết</span>' : '') + '</div>' +
       '<div class="price">' + fmt(m.price) + ' · ' + esc(m.prep_minutes) + ' phút</div></div>' +
       '<div class="qty"><button data-d="-1">−</button><span>' + d.qty + '</span><button data-d="1">+</button></div></div>' +
       '<div class="extra"><input maxlength="100" placeholder="Ghi chú (ít cay, không hành...)">' +
@@ -168,6 +256,7 @@ function renderMenu() {
       div.querySelector('.qty span').textContent = d.qty;
       extra.style.display = d.qty > 0 ? 'flex' : 'none';
       star.classList.toggle('on', d.priority);
+      div.classList.toggle('picked', d.qty > 0);
       div.classList.toggle('prio', d.priority && d.qty > 0);
       updateSum();
     };
@@ -189,7 +278,13 @@ function renderMenu() {
     box.appendChild(div);
   }
   for (const id in draft) if (!menu.some(m => m.menu_id === id)) delete draft[id];
+  filterMenu();
   updateSum();
+}
+
+function filterMenu() {
+  const q = plain(document.getElementById('search').value.trim());
+  document.querySelectorAll('#menu .item').forEach(div => div.classList.toggle('hidden', q !== '' && !div.dataset.key.includes(q)));
 }
 
 function countDraftPriority() {
@@ -200,18 +295,22 @@ function updateSum() {
   let n = 0, total = 0;
   for (const m of menu) { const d = draft[m.menu_id]; if (d && d.qty > 0) { n += d.qty; total += d.qty * m.price; } }
   const p = countDraftPriority();
+  const table = Number($table.value);
   document.getElementById('sum').innerHTML = n === 0 ? 'Chưa chọn món'
-    : '<b>' + n + ' phần · ' + fmt(total) + '</b>' + (p ? '<br>★ ' + p + ' món ưu tiên' : '');
+    : '<b>' + n + ' phần · ' + fmt(total) + '</b><br>' + (table ? 'Bàn ' + table : 'Chưa nhập số bàn') + (p ? ' · ★ ' + p + ' ưu tiên' : '');
+  const btn = document.getElementById('send');
+  btn.disabled = n === 0;
+  btn.textContent = table ? 'Gửi bếp · Bàn ' + table : 'Gửi bếp';
 }
 
 document.getElementById('send').onclick = async () => {
-  const table = Number(document.getElementById('table').value);
+  const table = Number($table.value);
   const items = [];
   for (const m of menu) {
     const d = draft[m.menu_id];
     if (d && d.qty > 0) items.push({ menu_id: m.menu_id, qty: d.qty, note: d.note.trim(), priority: d.priority || undefined });
   }
-  if (!table) { toast('Chưa nhập số bàn', true); return; }
+  if (!table) { toast('Chưa nhập số bàn', true); $table.focus(); return; }
   if (items.length === 0) { toast('Đơn chưa có món', true); return; }
   const pager = Number($pager.value);
   if (!pager) { toast('Chưa nhập số thiết bị rung', true); return; }
@@ -225,7 +324,8 @@ document.getElementById('send').onclick = async () => {
       toast('Đã gửi bàn ' + table + ' - đơn số ' + data.order_id + (data.kitchen_online ? '' : ' (bếp chưa kết nối!)'),
             !data.kitchen_online);
       for (const id in draft) draft[id] = { qty: 0, note: '', priority: false };
-      document.getElementById('table').value = '';
+      $table.value = '';
+      document.getElementById('search').value = '';
       renderMenu();
     } else {
       toast(data.message, true);
@@ -233,7 +333,7 @@ document.getElementById('send').onclick = async () => {
   } catch (e) {
     toast('Chưa gửi được, kiểm tra Wi-Fi rồi bấm lại', true);
   }
-  btn.disabled = false;
+  updateSum();
 };
 
 // ---------------- đơn đã gửi ----------------
@@ -251,43 +351,50 @@ function priorityRanks() {
 
 function renderSent() {
   const box = document.getElementById('sent');
-  if (document.getElementById('viewSent').classList.contains('hidden')) return;
   const all = document.getElementById('showAll').checked;
-  const ranks = priorityRanks();
   const list = Object.values(orders)
     .filter(o => all || o.waiter === deviceName())
     .filter(o => o.items.some(it => it.status !== 'SERVED' && it.status !== 'CANCELLED'))
     .sort((a, b) => b.order_id - a.order_id);
   let open = 0;
-  if (list.length === 0) {
-    box.innerHTML = '<div class="empty">Chưa có đơn nào đang làm' + (all ? '' : ' từ thiết bị này') + '.</div>';
-  } else {
-    box.innerHTML = '';
-    for (const o of list) {
-      const div = document.createElement('div');
-      div.className = 'order';
-      const time = new Date(o.created_at - clockOffset).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-      let html = '<h3>Bàn ' + esc(o.table) + '<small>Đơn ' + o.order_id + ' · ' + time + ' · rung ' + esc(o.pager_id) + '</small></h3>';
-      for (const it of o.items) {
-        if (it.status !== 'SERVED' && it.status !== 'CANCELLED') open++;
-        let state = STATUS[it.status] || it.status;
-        if (it.status === 'COOKING' && it.deadline) state += ' · còn ' + mmss(it.deadline - now());
-        if (it.status === 'CANCELLED' && it.reason) state += ': ' + esc(it.reason);
-        const rank = ranks.get(it);
-        html += '<div class="line"><div class="what">' + esc(it.name) + ' x' + esc(it.qty) +
-          (rank ? '<span class="badge">Ưu tiên #' + rank + '</span>' : '') +
-          (it.note ? '<small>' + esc(it.note) + '</small>' : '') + '</div>' +
-          '<div style="display:flex;gap:8px;align-items:center">' +
-          (it.status === 'PENDING' && !it.priority
-            ? '<button class="push" data-o="' + o.order_id + '" data-i="' + it.item_no + '">★ Đẩy ưu tiên</button>' : '') +
-          '<span class="chip s-' + it.status + '">' + state + '</span></div></div>';
-      }
-      div.innerHTML = html;
-      div.querySelectorAll('.push').forEach(b => b.onclick = () => pushPriority(Number(b.dataset.o), Number(b.dataset.i), b));
-      box.appendChild(div);
-    }
-  }
+  for (const o of list) for (const it of o.items) if (it.status !== 'SERVED' && it.status !== 'CANCELLED') open++;
   document.getElementById('tabSent').textContent = 'Đơn đã gửi' + (open ? ' (' + open + ')' : '');
+  if (document.getElementById('viewSent').classList.contains('hidden')) return;
+  const ranks = priorityRanks();
+  if (list.length === 0) {
+    box.innerHTML = '<div class="empty"><b>🍽</b>Chưa có đơn nào đang làm' + (all ? '' : ' từ thiết bị này') + '.</div>';
+    return;
+  }
+  box.innerHTML = '';
+  for (const o of list) {
+    const div = document.createElement('div');
+    div.className = 'order';
+    const time = new Date(o.created_at - clockOffset).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    let html = '<h3>Bàn ' + esc(o.table) + '<small>Đơn ' + o.order_id + ' · ' + time + ' · rung ' + esc(o.pager_id) + '</small></h3>';
+    for (const it of o.items) {
+      let state = STATUS[it.status] || it.status;
+      let bar = '';
+      if (it.status === 'COOKING' && it.deadline) {
+        state += ' · còn ' + mmss(it.deadline - now());
+        if (it.started_at) {
+          const pct = Math.min(100, Math.max(0, 100 * (now() - it.started_at) / Math.max(1, it.deadline - it.started_at)));
+          bar = '<div class="progress"><i class="' + (pct > 85 ? 'late' : '') + '" style="width:' + pct.toFixed(1) + '%"></i></div>';
+        }
+      }
+      if (it.status === 'CANCELLED' && it.reason) state += ': ' + esc(it.reason);
+      const rank = ranks.get(it);
+      html += '<div class="line"><div class="row"><div class="what">' + esc(it.name) + ' ×' + esc(it.qty) +
+        (rank ? '<span class="badge">Ưu tiên #' + rank + '</span>' : '') +
+        (it.note ? '<small>' + esc(it.note) + '</small>' : '') + '</div>' +
+        '<div style="display:flex;gap:8px;align-items:center">' +
+        (it.status === 'PENDING' && !it.priority
+          ? '<button class="push" data-o="' + o.order_id + '" data-i="' + it.item_no + '">★ Đẩy ưu tiên</button>' : '') +
+        '<span class="chip s-' + it.status + '">' + state + '</span></div></div>' + bar + '</div>';
+    }
+    div.innerHTML = html;
+    div.querySelectorAll('.push').forEach(b => b.onclick = () => pushPriority(Number(b.dataset.o), Number(b.dataset.i), b));
+    box.appendChild(div);
+  }
 }
 
 async function pushPriority(orderId, itemNo, btn) {
@@ -325,7 +432,7 @@ function connect() {
   const conn = document.getElementById('conn');
   const es = new EventSource('/api/events?name=' + encodeURIComponent(deviceName()));
   es.onopen = () => { conn.textContent = '● Đã kết nối'; conn.className = 'ok'; loadAll().catch(() => {}); };
-  es.onerror = () => { conn.textContent = '○ Mất kết nối - đang thử lại'; conn.className = ''; };
+  es.onerror = () => { conn.textContent = '○ Mất kết nối'; conn.className = ''; };
   es.addEventListener('MENU_UPDATE', e => {
     const d = JSON.parse(e.data);
     menu = d.menu || [];
@@ -359,7 +466,7 @@ setInterval(() => {
   post('/api/heartbeat', { command: 'PING', name: deviceName() })
     .then(d => syncClock(d.server_time)).catch(() => {});
 }, 5000);
-setInterval(renderSent, 1000);   // đồng hồ "còn m:ss"
+setInterval(renderSent, 1000);   // đồng hồ "còn m:ss" và thanh tiến độ
 
 loadAll().catch(() => document.getElementById('menu').textContent = 'Không tải được thực đơn');
 connect();

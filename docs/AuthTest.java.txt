@@ -1,0 +1,161 @@
+import kos.common.*;
+import kos.server.*;
+import java.io.*;
+import java.net.*;
+import java.nio.charset.StandardCharsets;
+
+public class AuthTest {
+    static int pass = 0, failN = 0;
+    static void check(String name, boolean ok, Object detail) {
+        System.out.println((ok ? "PASS " : "FAIL ") + name + (detail == null ? "" : "  -> " + detail));
+        if (ok) pass++; else failN++;
+    }
+
+    static class Conn implements Closeable {
+        Socket s; BufferedWriter out; BufferedReader in;
+        Conn() throws IOException {
+            s = new Socket("127.0.0.1", 6000); s.setSoTimeout(4000);
+            out = new BufferedWriter(new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8));
+            in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
+        }
+        Message call(Message m) throws IOException {
+            out.write(Json.toLine(m)); out.write('\n'); out.flush();
+            String l = in.readLine();
+            return l == null ? null : Json.parseMessage(l);
+        }
+        Message read() throws IOException { String l = in.readLine(); return l == null ? null : Json.parseMessage(l); }
+        public void close() throws IOException { s.close(); }
+    }
+
+    static Message one(Message m) throws IOException { try (Conn c = new Conn()) { return c.call(m); } }
+    static Message login(String u, String p) throws IOException {
+        Message m = new Message(Protocol.LOGIN); m.username = u; m.password = p; return one(m);
+    }
+    static Message register(String u, String name, String p, Role r) throws IOException {
+        Message m = new Message(Protocol.REGISTER); m.username = u; m.fullName = name; m.password = p; m.role = r; return one(m);
+    }
+    static Message hello(Conn c, String token, String mode) throws IOException {
+        Message m = new Message(Protocol.HELLO); m.name = "T"; m.mode = mode; m.token = token; return c.call(m);
+    }
+
+    public static void main(String[] a) throws Exception {
+        Thread t = new Thread(() -> { try { ServerApp.main(new String[]{"--console"}); } catch (Exception e) { e.printStackTrace(); } });
+        t.setDaemon(true); t.start();
+        Thread.sleep(2500);
+        var f = ServerApp.class.getDeclaredField("ctx"); f.setAccessible(true);
+        ServerContext ctx = (ServerContext) f.get(null);
+        AccountStore st = ctx.accounts();
+
+        Message r = register("hacker", "Hacker", "123456", Role.QUAN_LY);
+        check("dang ky qua mang khi chua co ai bi tu choi", Protocol.ERROR.equals(r.command), r.message);
+        st.register("admin", "Trịnh Hữu Nam", "admin123", null, "test", true);
+        check("tao quan ly dau tien", st.list().get(0).role == Role.QUAN_LY && "HOAT_DONG".equals(st.list().get(0).status), null);
+
+        r = register("Bep1", "Anh Ba", "123456", Role.BEP_TRUONG);
+        check("dang ky bep truong -> cho duyet", Protocol.OK.equals(r.command), r.message);
+        r = register("bep1", "Trùng", "123456", Role.BEP_PHU);
+        check("trung ten dang nhap (khong phan biet hoa thuong)", Protocol.ERROR.equals(r.command), r.message);
+        r = register("bep2", "Chị Tư", "123456", Role.BEP_PHU);
+        r = register("pv1", "Bé Năm", "123456", Role.PHUC_VU);
+        r = register("ql2", "Xin QL", "123456", Role.QUAN_LY);
+        check("khong tu xin vai tro Quan ly", Protocol.ERROR.equals(r.command), r.message);
+        r = register("a b", "X", "123456", Role.PHUC_VU);
+        check("ten dang nhap sai dinh dang", Protocol.ERROR.equals(r.command), r.message);
+        r = register("pv9", "X", "123", Role.PHUC_VU);
+        check("mat khau qua ngan", Protocol.ERROR.equals(r.command), r.message);
+        check("3 tai khoan cho duyet", st.pendingCount() == 3, st.pendingCount());
+
+        r = login("bep1", "123456");
+        check("chua duyet khong dang nhap duoc", Protocol.ERROR.equals(r.command), r.message);
+        st.approve("bep1", null, "admin");
+        st.approve("bep2", null, "admin");
+        st.approve("pv1", null, "admin");
+
+        String json = new String(java.nio.file.Files.readAllBytes(AccountStore.USERS), StandardCharsets.UTF_8);
+        check("users.json khong chua mat khau tho", !json.contains("123456") && !json.contains("admin123") && json.contains("salt"), null);
+
+        Message adm = login("ADMIN", "admin123");
+        check("dang nhap quan ly (ten hoa)", Protocol.LOGIN_OK.equals(adm.command) && adm.token != null && adm.user.role == Role.QUAN_LY, adm.user == null ? adm.message : adm.user.fullName);
+        Message b1 = login("bep1", "123456");
+        Message b2 = login("bep2", "123456");
+        Message p1 = login("pv1", "123456");
+        check("dang nhap 3 vai tro", b1.token != null && b2.token != null && p1.token != null, null);
+
+        try (Conn c = new Conn()) {
+            Message h = hello(c, null, "VIEW");
+            check("HELLO khong token bi tu choi (AUTH)", Protocol.ERROR.equals(h.command) && Protocol.ERR_AUTH.equals(h.code), h.message);
+        }
+        try (Conn c = new Conn()) {
+            Message h = hello(c, "token-gia", "VIEW");
+            check("HELLO token gia bi tu choi", Protocol.ERR_AUTH.equals(h.code), h.message);
+        }
+        try (Conn c = new Conn()) {
+            Message h = hello(c, p1.token, "VIEW");
+            check("Phuc vu khong mo duoc man hinh bep (FORBIDDEN)", Protocol.ERR_FORBIDDEN.equals(h.code), h.message);
+        }
+        try (Conn c = new Conn()) {
+            Message h = hello(c, b2.token, "MASTERCHEF");
+            check("Bep phu khong mo duoc MASTERCHEF", Protocol.ERR_FORBIDDEN.equals(h.code), h.message);
+        }
+        try (Conn c = new Conn()) {
+            Message h = hello(c, b2.token, "VIEW");
+            check("Bep phu mo duoc VIEW", Protocol.WELCOME.equals(h.command), h.command);
+        }
+        Conn mc = new Conn();
+        Message h = hello(mc, b1.token, "MASTERCHEF");
+        check("Bep truong mo duoc MASTERCHEF", Protocol.WELCOME.equals(h.command), h.command);
+        mc.read(); // SNAPSHOT
+        try (Conn c = new Conn()) {
+            Message h2 = hello(c, adm.token, "MASTERCHEF");
+            check("chi mot MASTERCHEF (quan ly bi bao ban)", Protocol.ERROR.equals(h2.command), h2.message);
+        }
+
+        // khoa tai khoan dang mo man hinh bep -> bi ngat ngay
+        st.setLocked("bep1", true, "admin");
+        Message kicked = mc.read();
+        check("khoa -> man hinh bep nhan ERROR AUTH", kicked != null && Protocol.ERR_AUTH.equals(kicked.code), kicked == null ? null : kicked.message);
+        String after;
+        try { after = mc.in.readLine(); } catch (IOException e) { after = null; }
+        check("ket noi bi dong", after == null, after);
+        check("phien bi huy", st.session(b1.token) == null, null);
+        r = login("bep1", "123456");
+        check("tai khoan khoa khong dang nhap duoc", Protocol.ERROR.equals(r.command), r.message);
+        st.setLocked("bep1", false, "admin");
+
+        // khong tu khoa / phai con quan ly
+        try { st.setLocked("admin", true, "admin"); check("khong tu khoa minh", false, null); }
+        catch (AccountStore.AuthError e) { check("khong tu khoa minh", true, e.getMessage()); }
+        try { st.setRole("admin", Role.PHUC_VU, "bep2"); check("phai con mot quan ly", false, null); }
+        catch (AccountStore.AuthError e) { check("phai con mot quan ly", true, e.getMessage()); }
+
+        // doi vai tro -> phien cu het hieu luc
+        st.setRole("bep2", Role.BEP_TRUONG, "admin");
+        check("doi vai tro huy phien cu", st.session(b2.token) == null, null);
+
+        // doi mat khau
+        Message cp = new Message(Protocol.CHANGE_PASSWORD); cp.token = p1.token; cp.password = "sai"; cp.newPassword = "moi123";
+        r = one(cp);
+        check("doi mat khau sai mat khau cu", Protocol.ERROR.equals(r.command), r.message);
+        cp.password = "123456";
+        r = one(cp);
+        check("doi mat khau dung", Protocol.OK.equals(r.command), r.message);
+        check("dang nhap bang mat khau moi", Protocol.LOGIN_OK.equals(login("pv1", "moi123").command), null);
+
+        // sai 5 lan -> khoa tam
+        for (int i = 0; i < 5; i++) login("bep2", "sai");
+        r = login("bep2", "123456");
+        check("sai 5 lan -> khoa tam 60 giay (ca mat khau dung)", Protocol.ERROR.equals(r.command) && r.message.contains("giây"), r.message);
+
+        // logout
+        Message lo = new Message(Protocol.LOGOUT); lo.token = adm.token; one(lo);
+        check("dang xuat huy phien", st.session(adm.token) == null, null);
+
+        // phien luu ra file, nap lai van con
+        Message pl = login("pv1", "moi123");
+        st.load();
+        check("phien con sau khi nap lai (khoi dong lai)", st.session(pl.token) != null, null);
+
+        System.out.println("\nKET QUA: " + pass + " dat, " + failN + " loi");
+        System.exit(failN == 0 ? 0 : 1);
+    }
+}

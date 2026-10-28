@@ -11,7 +11,8 @@ import java.util.Scanner;
 
 /**
  * Bản console của màn hình bếp, dùng để thử nhanh giao thức (bản có giao diện là MasterchefApp).
- * Cách chạy: tham số 1 = IP máy chủ (mặc định localhost), tham số 2 = MASTERCHEF hoặc VIEW.
+ * Cách chạy: tham số 1 = IP máy chủ (mặc định localhost), tham số 2 = tên đăng nhập, tham số 3 = mật khẩu
+ * (thiếu thì chương trình hỏi). Chế độ MASTERCHEF / VIEW do vai trò của tài khoản quyết định (F16).
  * Lệnh gõ tắt:
  *   nhan  &lt;đơn&gt; &lt;món&gt;          nhận làm (START_ITEMS)
  *   giahan &lt;đơn&gt; &lt;món&gt; &lt;phút&gt;  gia hạn (EXTEND_ITEMS)
@@ -23,11 +24,26 @@ public class MasterchefConsole {
 
     public static void main(String[] args) {
         String host = args.length > 0 ? args[0] : "localhost";
-        String mode = args.length > 1 ? args[1] : Protocol.MODE_MASTERCHEF;
+        Scanner keyboard = new Scanner(System.in, "UTF-8");
+        String user = args.length > 1 ? args[1] : ask(keyboard, "Tên đăng nhập: ");
+        String pass = args.length > 2 ? args[2] : ask(keyboard, "Mật khẩu: ");
+        kos.ui.AuthApi.Session session;
+        try {
+            session = new kos.ui.RemoteAuth(host).login(user, pass);
+        } catch (kos.ui.AuthApi.AuthException e) {
+            System.out.println("Không đăng nhập được: " + e.getMessage());
+            return;
+        }
+        String mode = session.user().role.kitchenMode();
+        if (mode == null) {
+            System.out.println("Vai trò " + session.user().role.label() + " không được mở màn hình bếp");
+            return;
+        }
+        System.out.println("Đã đăng nhập: " + session.user().fullName + " (" + session.user().role.label() + ", " + mode + ")");
         String name = Protocol.MODE_MASTERCHEF.equals(mode) ? "MC" : "VIEW";
 
         final ServerConnection[] holder = new ServerConnection[1];
-        ServerConnection conn = new ServerConnection(host, name, mode, new ServerConnection.Listener() {
+        ServerConnection conn = new ServerConnection(host, name, mode, session.token(), new ServerConnection.Listener() {
             @Override
             public void onMessage(Message m) {
                 if (Protocol.PONG.equals(m.command)) {
@@ -50,12 +66,17 @@ public class MasterchefConsole {
             public void onStatus(boolean connected, String text) {
                 System.out.println("[" + (connected ? "OK" : "--") + "] " + text);
             }
+
+            @Override
+            public void onAuthFailed(String message) {
+                System.out.println("!! Máy chủ ngắt phiên: " + message + " (gõ exit để thoát)");
+            }
         });
         holder[0] = conn;
         conn.start();
 
         System.out.println("Lệnh: nhan <đơn> <món> | giahan <đơn> <món> <phút> | xong <đơn> <món> | het <mã món> [lý do] | exit");
-        try (Scanner sc = new Scanner(System.in, "UTF-8")) {
+        try (Scanner sc = keyboard) {
             while (sc.hasNextLine()) {
                 String line = sc.nextLine().trim();
                 if (line.equalsIgnoreCase("exit")) {
@@ -73,6 +94,11 @@ public class MasterchefConsole {
             }
         }
         conn.stop();
+    }
+
+    private static String ask(Scanner sc, String prompt) {
+        System.out.print(prompt);
+        return sc.hasNextLine() ? sc.nextLine().trim() : "";
     }
 
     private static Message shortcut(String line, ServerConnection conn) {

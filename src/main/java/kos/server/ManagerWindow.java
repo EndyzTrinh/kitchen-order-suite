@@ -6,6 +6,7 @@ import kos.common.Json;
 import kos.common.MenuItem;
 import kos.common.Order;
 import kos.common.OrderItem;
+import kos.common.Theme;
 
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListModel;
@@ -49,22 +50,23 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Giao diện quầy quản lý (F10, F11) chạy cùng máy chủ. Bốn thẻ:
+ * Giao diện quầy quản lý (F10, F11) chạy cùng máy chủ. Năm thẻ:
  * <ul>
  *   <li>Đơn hàng: các món đang mở; hủy món chưa làm, đẩy ưu tiên, xác nhận lấy món thủ công.</li>
  *   <li>Thực đơn: thêm, sửa, xóa món, tạm hết; thay đổi được đẩy ngay tới mọi thiết bị.</li>
  *   <li>Thiết bị: màn hình bếp, trang gọi món, thiết bị rung đang kết nối.</li>
  *   <li>Log: nhật ký máy chủ; dòng CẢNH BÁO tô đỏ và có chuông.</li>
+ *   <li>Thống kê (F15): thời gian chuẩn / thực tế theo món, khung giờ, người làm; xuất CSV.</li>
  * </ul>
  * Dữ liệu đọc qua các bản sao (snapshotCopy, getAll) và làm mới mỗi giây bằng javax.swing.Timer,
  * nên giao diện không giữ khóa của máy chủ.
  */
 public class ManagerWindow extends JFrame {
 
-    private static final Font BASE = new Font(Font.SANS_SERIF, Font.PLAIN, 15);
+    private static final Font BASE = Theme.font(Font.PLAIN, 15);
     private static final Font BOLD = BASE.deriveFont(Font.BOLD);
-    private static final Color RED = new Color(192, 57, 43);
-    private static final Color ORANGE = new Color(255, 224, 178);
+    private static final Color RED = Theme.DANGER;
+    private static final Color ORANGE = Theme.WARNING_SOFT;
 
     private final ServerContext ctx;
     private final Runnable onShutdown;
@@ -105,10 +107,18 @@ public class ManagerWindow extends JFrame {
     private final JTextPane logPane = new JTextPane();
     private int unreadWarnings;
 
-    public ManagerWindow(ServerContext ctx, Runnable onShutdown) {
+    // Tài khoản (F16)
+    private final java.util.function.Supplier<String> currentUser;
+    private AccountsPanel accounts;
+
+    /**
+     * @param currentUser tên đăng nhập của quản lý đang dùng cửa sổ (F16)
+     */
+    public ManagerWindow(ServerContext ctx, Runnable onShutdown, java.util.function.Supplier<String> currentUser) {
         super("Quầy quản lý - Kitchen Order Suite");
         this.ctx = ctx;
         this.onShutdown = onShutdown;
+        this.currentUser = currentUser;
         buildUi();
         ctx.addLogListener(line -> SwingUtilities.invokeLater(() -> appendLog(line)));
         new Timer(1000, e -> refresh()).start();
@@ -129,13 +139,28 @@ public class ManagerWindow extends JFrame {
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                confirmShutdown();
+                // F16: đóng cửa sổ chỉ ẩn đi, quay về trang chủ hệ thống; máy chủ vẫn chạy
+                setVisible(false);
             }
         });
 
-        JPanel top = new JPanel(new BorderLayout(10, 0));
-        top.setBorder(BorderFactory.createEmptyBorder(8, 12, 8, 12));
-        addressLabel.setFont(BASE);
+        JPanel top = new JPanel(new BorderLayout(16, 0));
+        top.setBackground(Theme.SURFACE);
+        top.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, Theme.BORDER),
+                BorderFactory.createEmptyBorder(10, 16, 10, 16)));
+        addressLabel.setFont(BASE.deriveFont(13f));
+        addressLabel.setForeground(Theme.MUTED);
+        JLabel brand = Theme.title("Kitchen Order Suite", 20);
+        brand.setForeground(Theme.PRIMARY);
+        JLabel sub = new JLabel("Quầy quản lý  ·  máy chủ");
+        sub.setFont(BOLD);
+        sub.setForeground(Theme.TEXT);
+        JPanel brandBox = new JPanel(new BorderLayout());
+        brandBox.setOpaque(false);
+        brandBox.add(brand, BorderLayout.NORTH);
+        brandBox.add(sub, BorderLayout.SOUTH);
+        top.add(brandBox, BorderLayout.WEST);
         JButton stop = new JButton("Tắt máy chủ");
         stop.setFont(BOLD);
         stop.setBackground(RED);
@@ -149,16 +174,26 @@ public class ManagerWindow extends JFrame {
         tabs.addTab("Thực đơn", buildMenuTab());
         tabs.addTab("Thiết bị", buildDevicesTab());
         tabs.addTab("Log", buildLogTab());
+        StatsPanel stats = new StatsPanel(ctx);
+        tabs.addTab("Thống kê", stats);
+        accounts = new AccountsPanel(ctx.accounts(), currentUser);
+        tabs.addTab("Tài khoản", accounts);
         tabs.addChangeListener(e -> {
             if (tabs.getSelectedIndex() == 3) {
                 unreadWarnings = 0;
                 tabs.setTitleAt(3, "Log");
             }
+            if (tabs.getSelectedComponent() == stats) {
+                stats.reload();
+            }
         });
 
         getContentPane().add(top, BorderLayout.NORTH);
-        getContentPane().add(tabs, BorderLayout.CENTER);
-        setSize(1150, 720);
+        JPanel body = new JPanel(new BorderLayout());
+        body.setBorder(BorderFactory.createEmptyBorder(6, 12, 12, 12));
+        body.add(tabs, BorderLayout.CENTER);
+        getContentPane().add(body, BorderLayout.CENTER);
+        setSize(1240, 780);
         setLocationRelativeTo(null);
     }
 
@@ -169,10 +204,33 @@ public class ManagerWindow extends JFrame {
             @Override
             public Component getTableCellRendererComponent(JTable t, Object v, boolean sel, boolean f, int r, int c) {
                 Component comp = super.getTableCellRendererComponent(t, v, sel, f, r, c);
+                setBorder(BorderFactory.createEmptyBorder(0, 10, 0, 6));
                 if (!sel) {
                     comp.setBackground(r < orderPriority.size() && orderPriority.get(r) ? ORANGE : Color.WHITE);
                 }
                 return comp;
+            }
+        });
+        orderTable.getColumnModel().getColumn(4).setCellRenderer(new Theme.PillRenderer() {
+            @Override
+            protected Color[] colors(Object value, int row) {
+                String v = String.valueOf(value);
+                if (v.startsWith("Đang")) {
+                    return new Color[]{Theme.PRIMARY, Color.WHITE};
+                }
+                if (v.startsWith("Xong") || v.startsWith("Chờ lấy")) {
+                    return new Color[]{Theme.SUCCESS, Color.WHITE};
+                }
+                if (v.startsWith("Đã hủy")) {
+                    return new Color[]{Theme.DANGER_SOFT, Theme.DANGER};
+                }
+                return new Color[]{new Color(226, 232, 240), new Color(51, 65, 85)};
+            }
+
+            @Override
+            protected Color rowBackground(JTable t, int row, boolean selected) {
+                return selected ? t.getSelectionBackground()
+                        : row < orderPriority.size() && orderPriority.get(row) ? ORANGE : Color.WHITE;
             }
         });
         int[] w = {50, 50, 230, 40, 110, 90, 70, 100, 90};
@@ -181,7 +239,7 @@ public class ManagerWindow extends JFrame {
         }
         JButton cancel = button("Hủy món đã chọn", RED);
         cancel.addActionListener(e -> cancelSelected());
-        JButton priority = button("Đẩy ưu tiên", new Color(230, 126, 34));
+        JButton priority = button("Đẩy ưu tiên", Theme.WARNING);
         priority.addActionListener(e -> prioritizeSelected());
         JLabel hint = new JLabel("Chỉ hủy hoặc đẩy ưu tiên được món bếp chưa nhận làm.");
         hint.setFont(BASE);
@@ -194,7 +252,7 @@ public class ManagerWindow extends JFrame {
         upper.add(bar, BorderLayout.SOUTH);
 
         callList.setFont(BASE);
-        JButton confirm = button("Xác nhận đã lấy món", new Color(39, 174, 96));
+        JButton confirm = button("Xác nhận đã lấy món", Theme.SUCCESS);
         confirm.addActionListener(e -> confirmPickup());
         JLabel callTitle = new JLabel("Lệnh rung đang mở (dùng khi thiết bị rung không phản hồi):");
         callTitle.setFont(BOLD);
@@ -237,9 +295,9 @@ public class ManagerWindow extends JFrame {
             c.setFont(BASE);
             form.add(c);
         }
-        JButton save = button("Thêm / Cập nhật", new Color(39, 174, 96));
+        JButton save = button("Thêm / Cập nhật", Theme.SUCCESS);
         save.addActionListener(e -> saveMenuItem());
-        JButton toggle = button("Tạm hết / Có lại", new Color(230, 126, 34));
+        JButton toggle = button("Tạm hết / Có lại", Theme.WARNING);
         toggle.addActionListener(e -> toggleSoldOut());
         JButton delete = button("Xóa món", RED);
         delete.addActionListener(e -> deleteMenuItem());
@@ -275,8 +333,9 @@ public class ManagerWindow extends JFrame {
             @Override
             public Component getTableCellRendererComponent(JTable t, Object v, boolean sel, boolean f, int r, int c) {
                 Component comp = super.getTableCellRendererComponent(t, v, sel, f, r, c);
+                setBorder(BorderFactory.createEmptyBorder(0, 10, 0, 6));
                 boolean offline = r < deviceRows.size() && deviceRows.get(r)[4].startsWith("Mất");
-                comp.setForeground(offline ? RED : Color.BLACK);
+                comp.setForeground(offline ? RED : Theme.TEXT);
                 return comp;
             }
         });
@@ -288,19 +347,28 @@ public class ManagerWindow extends JFrame {
     private JScrollPane buildLogTab() {
         logPane.setEditable(false);
         logPane.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
+        logPane.setMargin(new java.awt.Insets(8, 10, 8, 10));
         return new JScrollPane(logPane);
     }
 
     private void style(JTable t) {
         t.setFont(BASE);
-        t.setRowHeight(28);
+        Theme.table(t, 34);
         t.getTableHeader().setFont(BOLD);
-        t.setFillsViewportHeight(true);
+        t.setDefaultRenderer(Object.class, new DefaultTableCellRenderer() {
+            @Override
+            public Component getTableCellRendererComponent(JTable tb, Object v, boolean sel, boolean f, int r, int c) {
+                Component comp = super.getTableCellRendererComponent(tb, v, sel, f, r, c);
+                setBorder(BorderFactory.createEmptyBorder(0, 10, 0, 6));
+                return comp;
+            }
+        });
     }
 
     private JButton button(String text, Color color) {
         JButton b = new JButton(text);
         b.setFont(BOLD);
+        b.setFocusable(false);
         if (color != null) {
             b.setBackground(color);
             b.setForeground(Color.WHITE);
@@ -315,6 +383,13 @@ public class ManagerWindow extends JFrame {
     // ------------------------------------------------------------------ làm mới (mỗi giây)
 
     private void refresh() {
+        if (accounts != null) {
+            accounts.refresh();
+            int pending = ctx.accounts().pendingCount();
+            int idx = tabs.indexOfComponent(accounts);
+            tabs.setTitleAt(idx, pending > 0 ? "Tài khoản (" + pending + " chờ duyệt)" : "Tài khoản");
+            tabs.setForegroundAt(idx, pending > 0 ? Theme.WARNING : null);
+        }
         long now = System.currentTimeMillis();
 
         // Đơn hàng
@@ -571,7 +646,19 @@ public class ManagerWindow extends JFrame {
         return menuItems.get(i);
     }
 
-    private void confirmShutdown() {
+    /** Mở cửa sổ ở thẻ có tiêu đề bắt đầu bằng title (ví dụ "Thống kê", "Tài khoản"). */
+    public void showTab(String title) {
+        for (int i = 0; i < tabs.getTabCount(); i++) {
+            if (tabs.getTitleAt(i).startsWith(title)) {
+                tabs.setSelectedIndex(i);
+            }
+        }
+        setVisible(true);
+        setExtendedState(NORMAL);
+        toFront();
+    }
+
+    public void confirmShutdown() {
         if (JOptionPane.showConfirmDialog(this, "Tắt máy chủ? Các đơn đang làm được lưu lại và khôi phục khi mở lại.",
                 "Tắt máy chủ", JOptionPane.YES_NO_OPTION) == JOptionPane.YES_OPTION) {
             new Thread(onShutdown, "shutdown").start();

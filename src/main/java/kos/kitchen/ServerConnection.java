@@ -31,11 +31,16 @@ public class ServerConnection {
         void onMessage(Message m);
 
         void onStatus(boolean connected, String text);
+
+        /** Máy chủ từ chối phiên đăng nhập (hết hạn, bị khóa, vai trò không đủ). Kết nối đã dừng hẳn. */
+        default void onAuthFailed(String message) {
+        }
     }
 
     private final String host;
     private final String name;
     private final String mode;
+    private final String token;
     private final Listener listener;
     private final AtomicInteger reqCounter = new AtomicInteger();
     private final ScheduledExecutorService pinger = Executors.newSingleThreadScheduledExecutor();
@@ -46,10 +51,14 @@ public class ServerConnection {
     /** Giờ máy chủ trừ giờ máy này, dùng để hiển thị đồng hồ đúng. */
     private volatile long clockOffset;
 
-    public ServerConnection(String host, String name, String mode, Listener listener) {
+    /**
+     * @param token mã phiên nhận được khi đăng nhập (F16), gửi kèm HELLO mỗi lần kết nối / kết nối lại
+     */
+    public ServerConnection(String host, String name, String mode, String token, Listener listener) {
         this.host = host;
         this.name = name;
         this.mode = mode;
+        this.token = token;
         this.listener = listener;
     }
 
@@ -111,6 +120,7 @@ public class ServerConnection {
                 Message hello = new Message(Protocol.HELLO);
                 hello.name = name;
                 hello.mode = mode;
+                hello.token = token;
                 send(hello);
 
                 String line;
@@ -122,6 +132,13 @@ public class ServerConnection {
                         }
                         if (Protocol.WELCOME.equals(m.command)) {
                             listener.onStatus(true, "Đã kết nối " + host);
+                        }
+                        if (Protocol.ERROR.equals(m.command) && (Protocol.ERR_AUTH.equals(m.code)
+                                || Protocol.ERR_FORBIDDEN.equals(m.code))) {
+                            running = false;
+                            listener.onStatus(false, "Bị từ chối: " + m.message);
+                            listener.onAuthFailed(m.message);
+                            break;
                         }
                         listener.onMessage(m);
                     } catch (JsonParseException e) {

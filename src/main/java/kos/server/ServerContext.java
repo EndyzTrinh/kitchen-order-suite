@@ -25,6 +25,8 @@ public class ServerContext {
     private final DeviceRegistry devices;
     private final PagerDispatcher pagers;
     private final KitchenController kitchen;
+    private final HistoryStore history;
+    private final AccountStore accounts;
     private final List<Consumer<String>> logListeners = new CopyOnWriteArrayList<>();
 
     public ServerContext(MenuStore menu, OrderStore orders) {
@@ -34,6 +36,8 @@ public class ServerContext {
         this.devices = new DeviceRegistry(this);
         this.pagers = new PagerDispatcher(this);
         this.kitchen = new KitchenController(this);
+        this.history = new HistoryStore(this);
+        this.accounts = new AccountStore(this);
     }
 
     public MenuStore menu() {
@@ -65,6 +69,16 @@ public class ServerContext {
 
     public KitchenController kitchen() {
         return kitchen;
+    }
+
+    /** Lịch sử thời gian làm món (data/lich-su.csv) cho thẻ Thống kê (F15). */
+    public HistoryStore history() {
+        return history;
+    }
+
+    /** Tài khoản, phiên đăng nhập, phân quyền (F16). */
+    public AccountStore accounts() {
+        return accounts;
     }
 
     /** Gửi ORDER_NEW, ITEM_UPDATE, MENU_UPDATE tới màn hình bếp (TCP) và trang gọi món (SSE). */

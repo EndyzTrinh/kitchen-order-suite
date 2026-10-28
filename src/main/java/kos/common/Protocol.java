@@ -57,6 +57,12 @@ public final class Protocol {
     public static final String EXTEND_ITEMS = "EXTEND_ITEMS";
     public static final String FINISH_ITEMS = "FINISH_ITEMS";
     public static final String SOLD_OUT = "SOLD_OUT";
+    /** Đã rung nhưng món chưa xong: READY quay lại COOKING, thêm phút (F15). */
+    public static final String NOT_DONE = "NOT_DONE";
+
+    /** Lý do gia hạn / chưa xong để thống kê (F15). */
+    public static final String[] EXTEND_REASONS = {
+            "Đông khách", "Thiếu nguyên liệu", "Khách yêu cầu thay đổi", "Món làm gộp nhiều phần", "Khác"};
 
     // ---- Lệnh: trang gọi món / quầy -> máy chủ: xin ưu tiên (F14) ----
     public static final String PRIORITY_ITEMS = "PRIORITY_ITEMS";
@@ -78,4 +84,22 @@ public final class Protocol {
     public static final String PAGER_RECEIVED = "PAGER_RECEIVED";
     public static final String PICKED_UP = "PICKED_UP";
     public static final String PAGER_CLOSE = "PAGER_CLOSE";
+
+    // Tài khoản và đăng nhập (F16). Được gửi trước HELLO trên kênh TCP.
+    public static final String LOGIN = "LOGIN";
+    public static final String LOGIN_OK = "LOGIN_OK";
+    public static final String REGISTER = "REGISTER";
+    public static final String LOGOUT = "LOGOUT";
+    public static final String CHANGE_PASSWORD = "CHANGE_PASSWORD";
+    /** Trả lời thành công chung cho REGISTER, LOGOUT, CHANGE_PASSWORD. */
+    public static final String OK = "OK";
+    /** Mã lỗi trong ERROR: phiên đăng nhập không hợp lệ / hết hạn / tài khoản bị khóa. */
+    public static final String ERR_AUTH = "AUTH";
+    /** Mã lỗi trong ERROR: vai trò không được làm việc này. */
+    public static final String ERR_FORBIDDEN = "FORBIDDEN";
+    /** Phiên đăng nhập hết hạn sau 12 giờ không dùng. */
+    public static final long SESSION_TTL_MS = 12L * 60 * 60 * 1000;
+    /** Sai mật khẩu 5 lần liên tiếp thì khóa tạm 60 giây. */
+    public static final int MAX_LOGIN_FAILS = 5;
+    public static final long LOGIN_LOCK_MS = 60_000;
 }

@@ -31,6 +31,22 @@ public class OrderItem {
     /** Thời điểm xin ưu tiên (mili giây, đồng hồ máy chủ); hàng đợi ưu tiên xếp theo trường này. */
     public Long priorityAt;
 
+    // ---- Dữ liệu thời gian thực tế (F15), dùng cho thống kê ----
+    /** Tên chef nhận làm món. */
+    public String chef;
+    /** Tổng số phần cùng món được nhận làm chung một lượt (làm gộp). */
+    public Integer batchQty;
+    /** Số lần gia hạn và các lý do, ví dụ "Đông khách (+3); Thiếu nguyên liệu (+1)". */
+    public Integer extendCount;
+    public String extendReasons;
+    /** Số lần chef bấm "Chưa xong" sau khi đã rung. */
+    public Integer notDoneCount;
+    /** Thời điểm món xong thật (chuyển READY lần cuối) và thời điểm phục vụ lấy món. */
+    public Long finishedAt;
+    public Long servedAt;
+    /** Cách kết thúc: "Hết giờ" (tự động) hoặc "Xong sớm" (chef bấm). */
+    public String finishMode;
+
     public OrderItem() {
     }
 

@@ -178,6 +178,36 @@ public class PagerDispatcher {
         return true;
     }
 
+    /**
+     * Rút một món khỏi lệnh rung (chef bấm "Chưa xong"). Lệnh chứa món đó được đóng (thiết bị tắt rung);
+     * nếu lệnh còn món khác đã xong thì gửi một lệnh mới chỉ gồm các món còn lại.
+     */
+    public synchronized void withdraw(int orderId, int itemNo) {
+        List<OrderItem> pending = pendingItems.get(orderId);
+        if (pending != null) {
+            pending.removeIf(it -> it.itemNo == itemNo);
+        }
+        for (Call call : new ArrayList<>(calls.values())) {
+            if (call.orderId != orderId || call.items.stream().noneMatch(it -> it.itemNo == itemNo)) {
+                continue;
+            }
+            close(call.callId);
+            List<OrderItem> rest = new ArrayList<>(call.items);
+            rest.removeIf(it -> it.itemNo == itemNo);
+            ctx.log("Rút lệnh rung " + call.callId + " (bàn " + call.table + "): món chưa xong");
+            if (!rest.isEmpty()) {
+                Call again = new Call();
+                again.callId = String.format("C-%04d", ++callCounter);
+                again.pagerId = call.pagerId;
+                again.orderId = call.orderId;
+                again.table = call.table;
+                again.items = rest;
+                calls.put(again.callId, again);
+                deliver(again);
+            }
+        }
+    }
+
     /** Danh sách lệnh rung đang mở, dạng chữ, cho giao diện quầy. */
     public synchronized List<String> describeOpenCalls() {
         List<String> list = new ArrayList<>();

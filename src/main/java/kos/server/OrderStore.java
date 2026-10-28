@@ -132,8 +132,11 @@ public class OrderStore {
 
     // ------------------------------------------------------------------ lệnh của masterchef
 
-    /** Nhận làm (F05): PENDING -> COOKING, đặt hạn giờ = now + thời gian chuẩn bị. */
-    public synchronized BatchResult startItems(List<OrderItem> refs, long now) {
+    /**
+     * Nhận làm (F05): PENDING -> COOKING, đặt hạn giờ = now + thời gian chuẩn bị.
+     * Ghi tên chef và số phần làm gộp (tổng số phần cùng món trong lượt nhận làm này) để thống kê (F15).
+     */
+    public synchronized BatchResult startItems(List<OrderItem> refs, long now, String chef) {
         List<Change> changed = new ArrayList<>();
         List<String> errors = new ArrayList<>();
         for (OrderItem ref : refs) {
@@ -150,13 +153,23 @@ public class OrderStore {
             it.status = ItemStatus.COOKING;
             it.startedAt = now;
             it.deadline = now + prep * MINUTE_MS;
+            it.chef = chef;
+            it.extendCount = 0;
+            it.notDoneCount = 0;
             changed.add(c);
+        }
+        Map<String, Integer> batch = new HashMap<>();
+        for (Change c : changed) {
+            batch.merge(c.item().menuId, c.item().qty, Integer::sum);
+        }
+        for (Change c : changed) {
+            c.item().batchQty = batch.get(c.item().menuId);
         }
         return new BatchResult(changed, errors);
     }
 
     /** Gia hạn (F06): cộng thêm minutes phút vào hạn giờ của món đang làm. */
-    public synchronized BatchResult extendItems(List<OrderItem> refs, int minutes) {
+    public synchronized BatchResult extendItems(List<OrderItem> refs, int minutes, String reason) {
         List<Change> changed = new ArrayList<>();
         List<String> errors = new ArrayList<>();
         for (OrderItem ref : refs) {
@@ -176,6 +189,7 @@ public class OrderStore {
             }
             it.extendedMinutes = already + minutes;
             it.deadline = it.deadline + minutes * MINUTE_MS;
+            addReason(it, reason, minutes);
             changed.add(c);
         }
         return new BatchResult(changed, errors);
@@ -195,9 +209,46 @@ public class OrderStore {
                 continue;
             }
             c.item().status = ItemStatus.READY;
+            c.item().finishedAt = System.currentTimeMillis();
+            c.item().finishMode = "Xong sớm";
             changed.add(c);
         }
         return new BatchResult(changed, errors);
+    }
+
+    /**
+     * Chưa xong (F15): thiết bị rung đã kêu nhưng món chưa làm xong. READY -> COOKING,
+     * hạn giờ mới = now + minutes. Số phút này cộng vào extended_minutes để thời gian thực tế đúng.
+     */
+    public synchronized BatchResult notDone(List<OrderItem> refs, int minutes, String reason, long now) {
+        List<Change> changed = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
+        for (OrderItem ref : refs) {
+            Change c = locate(ref, errors);
+            if (c == null) {
+                continue;
+            }
+            OrderItem it = c.item();
+            if (it.status != ItemStatus.READY) {
+                errors.add(label(c) + " không ở trạng thái chờ lấy");
+                continue;
+            }
+            it.status = ItemStatus.COOKING;
+            it.deadline = now + minutes * MINUTE_MS;
+            it.extendedMinutes = (it.extendedMinutes == null ? 0 : it.extendedMinutes) + minutes;
+            it.notDoneCount = (it.notDoneCount == null ? 0 : it.notDoneCount) + 1;
+            it.finishedAt = null;
+            it.finishMode = null;
+            addReason(it, "Chưa xong: " + reason, minutes);
+            changed.add(c);
+        }
+        return new BatchResult(changed, errors);
+    }
+
+    private static void addReason(OrderItem it, String reason, int minutes) {
+        String r = (reason == null || reason.isBlank() ? "Khác" : reason.trim()) + " (+" + minutes + ")";
+        it.extendCount = (it.extendCount == null ? 0 : it.extendCount) + 1;
+        it.extendReasons = it.extendReasons == null || it.extendReasons.isEmpty() ? r : it.extendReasons + "; " + r;
     }
 
     /**
@@ -314,6 +365,8 @@ public class OrderStore {
             return null;
         }
         it.status = ItemStatus.READY;
+        it.finishedAt = deadline;
+        it.finishMode = "Hết giờ";
         return new Change(o, it);
     }
 
@@ -328,6 +381,7 @@ public class OrderStore {
             OrderItem it = o.findItem(no);
             if (it != null && it.status == ItemStatus.READY) {
                 it.status = ItemStatus.SERVED;
+                it.servedAt = System.currentTimeMillis();
                 changed.add(new Change(o, it));
             }
         }

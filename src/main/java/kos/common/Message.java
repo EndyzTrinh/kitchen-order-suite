@@ -28,6 +28,9 @@ public class Message {
     public Integer extendedMinutes;
     public Boolean priority;
     public Long priorityAt;
+    /** Tên chef: gửi kèm START_ITEMS; có trong ITEM_UPDATE. */
+    public String chef;
+    public Long finishedAt;
     public List<OrderItem> items;
     public Order order;
     public List<Order> orders;
@@ -48,6 +51,17 @@ public class Message {
     public String message;
     public String reason;
     public String by;
+
+    // Tài khoản (F16)
+    public String username;
+    public String password;
+    public String newPassword;
+    public String fullName;
+    public Role role;
+    public String token;
+    public UserInfo user;
+    /** Mã lỗi đi kèm ERROR (Protocol.ERR_AUTH, ERR_FORBIDDEN), có thể null. */
+    public String code;
 
     public Message() {
     }
